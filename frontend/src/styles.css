@@ -1,0 +1,1111 @@
+:root {
+  --bg: #0f1216;
+  --surface: #171c22;
+  --surface-2: #1f252d;
+  --line: #2b333d;
+  --text: #e6eaef;
+  --muted: #97a3b1;
+  --red: #d0453e;
+  --red-soft: #f2a09b;
+  --blue: #3a7bd5;
+  --blue-soft: #9dc0f0;
+  --ok: #3fa66a;
+  --warn: #d9a441;
+  --radius: 10px;
+  --font: 'Segoe UI', system-ui, -apple-system, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ------------------------------------------------------------------ buttons */
+
+.btn {
+  padding: 9px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.05s ease;
+}
+.btn:hover:not(:disabled) {
+  background: #28313b;
+  border-color: #3c4753;
+}
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.btn--primary {
+  background: var(--red);
+  border-color: var(--red);
+}
+.btn--primary:hover:not(:disabled) {
+  background: #dc534c;
+  border-color: #dc534c;
+}
+.btn--ghost {
+  background: transparent;
+}
+
+/* -------------------------------------------------------------------- lobby */
+
+.lobby {
+  max-width: 940px;
+  margin: 0 auto;
+  padding: 40px 20px 64px;
+}
+.lobby__header {
+  text-align: center;
+  margin-bottom: 32px;
+}
+.lobby__header h1 {
+  margin: 0 0 8px;
+  font-size: 2.2rem;
+  letter-spacing: -0.02em;
+}
+.lobby__tagline {
+  margin: 0 auto;
+  max-width: 46ch;
+  color: var(--muted);
+}
+.lobby__cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+}
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 20px;
+}
+.card--wide {
+  margin-top: 16px;
+}
+.card h2 {
+  margin: 0 0 6px;
+  font-size: 1.05rem;
+}
+.card__hint {
+  margin: 0 0 16px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  min-height: 2.6em;
+}
+.card__form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.field input {
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #10151a;
+  color: var(--text);
+  font: inherit;
+}
+.field input:focus {
+  outline: 2px solid var(--blue);
+  outline-offset: 1px;
+}
+.field__error {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--red-soft);
+}
+.rules-list {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--muted);
+}
+.rules-list li + li {
+  margin-top: 6px;
+}
+
+/* ------------------------------------------------------- name gate / scores */
+
+.namegate {
+  max-width: 520px;
+}
+.namegate .card__form {
+  margin-top: 14px;
+}
+.card__link {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.card__link a,
+.lobby__identity a {
+  color: var(--blue-soft);
+}
+.lobby__identity {
+  margin: 12px 0 0;
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+.lobby__identity strong {
+  color: var(--text);
+}
+
+/* eight columns of figures is the widest thing in the app; on a phone it scrolls inside
+   its own box rather than pushing the page sideways under the reader's thumb */
+.scores__scroll {
+  overflow-x: auto;
+}
+.scores__scroll:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+@media (max-width: 520px) {
+  .scores th,
+  .scores td {
+    padding: 6px 7px;
+  }
+  .scores thead th {
+    font-size: 0.62rem;
+  }
+}
+.scores {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.scores th,
+.scores td {
+  padding: 7px 10px;
+  text-align: right;
+  border-bottom: 1px solid var(--line);
+}
+.scores thead th {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 600;
+}
+.scores tbody th {
+  text-align: left;
+  font-weight: 600;
+}
+.scores tbody tr:last-child th,
+.scores tbody tr:last-child td {
+  border-bottom: 0;
+}
+/* the win-rate meter: a wash behind the number, so the percentage stays the content */
+.scores__rate {
+  border-radius: 3px;
+  background-clip: padding-box;
+}
+.scores__row--you {
+  background: rgba(58, 123, 213, 0.14);
+}
+.scores__you {
+  color: var(--blue-soft);
+  font-weight: 400;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+}
+
+/* --------------------------------------------------------------- placement */
+
+.placement {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 28px 20px 48px;
+}
+/* chat sits under the camp on the deployment screen, where the two players are deciding
+   something they cannot yet see */
+.placement__chat {
+  margin-top: 16px;
+}
+
+.placement__header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+.placement__header h1 {
+  margin: 0 0 4px;
+  font-size: 1.6rem;
+}
+.placement__hint {
+  margin: 0;
+  color: var(--muted);
+  max-width: 48ch;
+}
+.placement__progress {
+  text-align: right;
+}
+.placement__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.progress__count {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+.progress__count--done {
+  background: rgba(63, 166, 106, 0.15);
+  border-color: var(--ok);
+  color: #8fe0b0;
+}
+.placement__layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px;
+  gap: 20px;
+  align-items: start;
+}
+@media (max-width: 760px) {
+  .placement__layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* -------------------------------------------------------------------- board */
+
+.board {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px;
+  overflow-x: auto;
+}
+.board--camp {
+  max-width: 520px;
+}
+.board__grid {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 460px;
+}
+.board__row {
+  display: grid;
+  grid-template-columns: repeat(9, 1fr);
+  gap: 4px;
+}
+
+.square {
+  position: relative;
+  aspect-ratio: 1;
+  min-height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #131820;
+  color: var(--text);
+  font: inherit;
+  padding: 0;
+  cursor: default;
+  transition: background 0.12s ease, box-shadow 0.12s ease, transform 0.08s ease;
+}
+.square--mine {
+  background: #16202c;
+}
+.square--empty.square--target {
+  background: #1d2b3a;
+  border-color: var(--blue);
+  box-shadow: inset 0 0 0 1px var(--blue);
+  cursor: pointer;
+}
+.square--selectable {
+  cursor: pointer;
+}
+.square--selectable:hover {
+  background: #202b3a;
+}
+.square--filled {
+  cursor: pointer;
+}
+.square--battle {
+  box-shadow: 0 0 0 2px var(--warn);
+}
+.square__coord {
+  position: absolute;
+  top: 2px;
+  left: 4px;
+  font-size: 0.6rem;
+  color: #55606c;
+  pointer-events: none;
+}
+
+.piece {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  width: 100%;
+  height: 100%;
+  min-height: 30px;
+  border-radius: 7px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  border: 1px solid transparent;
+  user-select: none;
+}
+.piece--red {
+  background: linear-gradient(180deg, #d8574f, #a8342e);
+  color: #fff;
+  border-color: #7d241f;
+}
+.piece--blue {
+  background: linear-gradient(180deg, #4a8ade, #2c63ad);
+  color: #fff;
+  border-color: #1f4a83;
+}
+.piece--face-down {
+  background: repeating-linear-gradient(
+    45deg,
+    #3a4350,
+    #3a4350 4px,
+    #333b46 4px,
+    #333b46 8px
+  );
+  color: #cdd6e0;
+  border-color: #2a323c;
+  font-size: 1rem;
+}
+.piece--flag {
+  background: repeating-linear-gradient(
+    90deg,
+    #e8e2cf,
+    #e8e2cf 4px,
+    #cdc4ab 4px,
+    #cdc4ab 8px
+  );
+  color: #4a4232;
+  border-color: #a89d80;
+}
+.piece--spy {
+  background: linear-gradient(180deg, #6a5aa8, #493a80);
+  border-color: #372c60;
+  color: #fff;
+}
+.piece--private {
+  background: linear-gradient(180deg, #6f7784, #4d545f);
+  border-color: #3a404a;
+  color: #fff;
+}
+.piece--tray {
+  width: auto;
+  height: auto;
+  min-height: 0;
+  min-width: 34px;
+  padding: 4px 7px;
+}
+
+/* ------------------------------------------------------------------- emblem */
+
+/* Fixed height so a one-pip Sergeant and a twelve-pip 5-Star General are the same size
+   overall and their labels sit on one line across the board. */
+.piece__emblem {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 11px;
+  line-height: 0;
+}
+
+.piece__pips {
+  display: grid;
+  grid-template-columns: repeat(4, 3px);
+  gap: 1px;
+  place-content: center;
+}
+
+.piece__pip {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  /* currentColor, so the pips follow the piece: white on a team colour, ink on the flag. */
+  background: currentColor;
+}
+
+.piece__glyph {
+  width: 12px;
+  height: 11px;
+}
+
+.piece--tray .piece__pip {
+  width: 4px;
+  height: 4px;
+}
+.piece--tray .piece__pips {
+  grid-template-columns: repeat(4, 4px);
+  gap: 1.5px;
+}
+.piece--tray .piece__emblem {
+  height: 14px;
+}
+.piece--tray .piece__glyph {
+  width: 14px;
+  height: 13px;
+}
+
+/* --------------------------------------------------------------------- tray */
+
+.tray {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 14px;
+}
+.tray__title {
+  margin: 0 0 10px;
+  font-size: 0.95rem;
+}
+.tray__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 340px;
+  overflow-y: auto;
+}
+.tray__item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 5px 7px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.tray__item:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+.tray__item--selected {
+  background: rgba(58, 123, 213, 0.16);
+  border-color: var(--blue);
+}
+.tray__item--spent {
+  opacity: 0.32;
+  cursor: not-allowed;
+}
+.tray__name {
+  flex: 1;
+  font-size: 0.84rem;
+}
+.tray__count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: 0.84rem;
+  color: var(--muted);
+}
+
+/* -------------------------------------------------------------- game screen */
+
+.game {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 18px 20px 40px;
+}
+.game__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  /* The header used to be a single line, which pushed the page sideways on a phone once
+     the seat chips grew a name in them. Wrapping is the whole fix: the controls drop under
+     the names rather than off the right-hand edge. */
+  flex-wrap: wrap;
+}
+.game__identity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.game__vs {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.game__code {
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+.game__controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.side {
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 0.82rem;
+  letter-spacing: 0.04em;
+}
+/* a seat chip: the name people recognise, with the colour underneath it for the board */
+.side {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1.25;
+  max-width: 10rem;
+}
+.side__name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.side__color {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  opacity: 0.75;
+}
+.side--red {
+  background: rgba(208, 69, 62, 0.18);
+  color: var(--red-soft);
+}
+.side--blue {
+  background: rgba(58, 123, 213, 0.18);
+  color: var(--blue-soft);
+}
+.conn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+.conn::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #4a545f;
+}
+.conn--on::before {
+  background: var(--ok);
+}
+.conn--off::before {
+  background: var(--warn);
+}
+
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 14px;
+  margin-bottom: 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  font-weight: 600;
+}
+.banner--go {
+  border-color: var(--ok);
+  background: rgba(63, 166, 106, 0.12);
+  color: #9fe6bf;
+}
+.banner--alert {
+  border-color: var(--red);
+  background: rgba(208, 69, 62, 0.14);
+  color: var(--red-soft);
+}
+.banner--warn {
+  border-color: var(--warn);
+  background: rgba(217, 164, 65, 0.12);
+  color: #f0cd8b;
+}
+.banner__hint {
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 0.85rem;
+}
+
+.game__layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 250px;
+  gap: 16px;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .game__layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.panel__section {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 13px;
+}
+.panel__title {
+  margin: 0 0 9px;
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.strength {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.strength__side {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 42px;
+}
+.strength__count {
+  font-size: 1.3rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.strength__label {
+  font-size: 0.7rem;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+.strength__bar {
+  flex: 1;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--blue);
+  overflow: hidden;
+}
+.strength__bar-fill {
+  height: 100%;
+  background: var(--red);
+  transition: width 0.3s ease;
+}
+
+.log {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 320px;
+  overflow-y: auto;
+  font-size: 0.83rem;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.log__entry {
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--muted);
+}
+.log__entry--mine {
+  color: var(--text);
+  background: #223040;
+}
+.log__empty {
+  color: #5d6874;
+  font-style: italic;
+}
+
+/* ---------------------------------------------------------------------- chat */
+
+.panel__section--chat {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.chat {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 200px;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  font-size: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.chat__line {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+.chat__line--mine {
+  background: #223040;
+}
+.chat__who {
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+}
+.chat__who--red {
+  color: var(--red-soft);
+}
+.chat__who--blue {
+  color: var(--blue-soft);
+}
+.chat__line--mine .chat__who {
+  color: var(--blue-soft);
+}
+.chat__text {
+  color: var(--text);
+}
+.chat__empty {
+  color: #5d6874;
+  font-style: italic;
+}
+.chat__form {
+  display: flex;
+  gap: 6px;
+}
+.chat__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 7px 9px;
+  font: inherit;
+  font-size: 0.85rem;
+}
+.chat__input:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 1px;
+}
+.chat__send {
+  flex: 0 0 auto;
+  padding: 7px 12px;
+}
+.chat__hint,
+.chat__error {
+  margin: 0;
+  font-size: 0.75rem;
+}
+.chat__hint {
+  color: var(--muted);
+}
+.chat__error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #f0a0a0;
+}
+.chat__dismiss {
+  background: none;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+/* ------------------------------------------------------------------ overlays */
+
+.alert {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 14px;
+  border-radius: var(--radius);
+  margin-bottom: 12px;
+  font-size: 0.9rem;
+}
+.alert--error {
+  border: 1px solid var(--red);
+  background: rgba(208, 69, 62, 0.13);
+  color: var(--red-soft);
+}
+.alert__close {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 1.3rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.battle-overlay {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(8, 10, 13, 0.62);
+  pointer-events: none;
+  z-index: 20;
+}
+.battle-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 22px 26px;
+  text-align: center;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+  animation: pop 0.18s ease-out;
+}
+@keyframes pop {
+  from {
+    transform: scale(0.94);
+    opacity: 0;
+  }
+}
+.battle-card__title {
+  margin: 0 0 14px;
+  font-size: 1.05rem;
+}
+.battle-card__duel {
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  gap: 16px;
+}
+.battle-card__side {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 150px;
+  padding: 11px 13px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+}
+.battle-card__side--red {
+  background: rgba(208, 69, 62, 0.13);
+}
+.battle-card__side--blue {
+  background: rgba(58, 123, 213, 0.13);
+}
+.battle-card__rank {
+  font-weight: 700;
+}
+.battle-card__origin {
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+.battle-card__fate {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.battle-card__vs {
+  align-self: center;
+  color: var(--muted);
+  font-weight: 700;
+}
+.battle-card__note {
+  margin: 14px 0 0;
+  color: var(--muted);
+  font-size: 0.83rem;
+  max-width: 42ch;
+}
+
+.gameover-overlay {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(8, 10, 13, 0.78);
+  z-index: 30;
+}
+.gameover {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 28px 32px;
+  text-align: center;
+  min-width: 300px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+}
+.gameover--won {
+  border-color: var(--ok);
+}
+.gameover--lost {
+  border-color: var(--red);
+}
+.gameover__title {
+  margin: 0 0 6px;
+  font-size: 2rem;
+  letter-spacing: -0.02em;
+}
+.gameover--won .gameover__title {
+  color: #8fe0b0;
+}
+.gameover--lost .gameover__title {
+  color: var(--red-soft);
+}
+.gameover__reason {
+  margin: 0 0 18px;
+  color: var(--muted);
+}
+.gameover__stats {
+  display: flex;
+  justify-content: center;
+  gap: 22px;
+  margin: 0 0 22px;
+}
+.gameover__stats div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.gameover__stats dt {
+  font-size: 0.7rem;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+.gameover__stats dd {
+  margin: 0;
+  font-size: 1.2rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.gameover__against {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+.gameover__recorded {
+  margin: 0 0 18px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+.gameover__actions {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+}
+
+/* -------------------------------------------------------- waiting / loading */
+
+.waiting,
+.loading {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  text-align: center;
+}
+.waiting h1 {
+  margin: 0;
+  font-size: 1.6rem;
+}
+/* the waiting room is a centred column, so the chat box is given a width rather than
+   being left to shrink-wrap its first line */
+.waiting .panel__section--chat {
+  width: 100%;
+  max-width: 34rem;
+  text-align: left;
+}
+.waiting__hint {
+  margin: 0;
+  color: var(--muted);
+  max-width: 44ch;
+}
+.waiting__code {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.waiting__code code {
+  font-size: 1.05rem;
+  letter-spacing: 0.08em;
+}
+.loading__spinner {
+  width: 34px;
+  height: 34px;
+  border: 3px solid var(--line);
+  border-top-color: var(--red);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

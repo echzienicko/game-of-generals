@@ -18,6 +18,9 @@ export type Rank =
   | 'SPY'
   | 'FLAG'
 
+/** How hard the computer tries, as the server spells it on `?difficulty=`. */
+export type BotDifficulty = 'RANDOM' | 'HEURISTIC' | 'LEARNING'
+
 export type GameStatus =
   | 'WAITING_FOR_OPPONENT'
   | 'PLACEMENT'
@@ -62,10 +65,25 @@ export interface GameState {
   gameId: string
   status: GameStatus
   youAre: PlayerColor
+  /**
+   * Whether this viewer has sent their army in. True only for the player it belongs to, and
+   * the only deployment fact a client gets — it is what settles the deploy button, and it
+   * survives a refresh, which a piece of local component state would not.
+   */
+  youPlaced: boolean
   currentPlayer: PlayerColor | null
   winner: PlayerColor | null
   winReason: string | null
   flagEscapePending: boolean
+  /**
+   * When the turn on the clock falls due, as the server's epoch milliseconds, or null when
+   * no move is being timed: before deployment, on the computer's turn, and after the game.
+   * An absolute instant rather than a number of seconds, because the countdown is read on
+   * arrival and a delay in transit must not lengthen the turn.
+   */
+  turnDeadlineMillis: number | null
+  /** Seconds a move is given, 0 when the clock is off. Drawn as the bar behind the number. */
+  turnSeconds: number
   turnNumber: number
   rows: number
   cols: number
@@ -80,12 +98,18 @@ export interface GameState {
   chat: ChatMessage[]
 }
 
-/** One side of a game: who is in it, and whether that is you. */
+/**
+ * One side of a game: who is in it, and whether that is you.
+ *
+ * `difficulty` is the computer's level and null for a person — the player chose it on the
+ * way in, so the board can name the level it is playing rather than just "Computer".
+ */
 export interface Seat {
   color: PlayerColor
   name: string | null
   bot: boolean
   you: boolean
+  difficulty: BotDifficulty | null
 }
 
 /** A line of chat. The author comes from the server's seat, never from the client. */

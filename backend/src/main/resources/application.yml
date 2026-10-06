@@ -26,3 +26,7 @@ server:
 generals:
   leaderboard:
     path: data/leaderboard.json
+  # Seconds a player has to move. When it runs out the server plays a random legal move for
+  # them, so an abandoned game keeps going instead of hanging on a player who closed the tab.
+  # Set 0 for an untimed game: no clock is sent and nothing moves itself.
+  turn-seconds: 60

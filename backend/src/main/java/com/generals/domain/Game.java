@@ -165,6 +165,22 @@ public final class Game {
 
     /** Plays one turn for {@code color} and returns the recorded move. */
     public MoveRecord move(PlayerColor color, Position from, Position to) {
+        return play(color, from, to, false);
+    }
+
+    /**
+     * The same move, played by the server because the player's clock ran out.
+     *
+     * <p>Nothing about the move itself is different — the same validation, the same battle
+     * resolution, the same win checks. Only the move log says that nobody chose it, because
+     * that is the one fact the two players cannot work out for themselves and because a
+     * piece that moved by itself with no explanation reads as a bug.
+     */
+    public MoveRecord moveByClock(PlayerColor color, Position from, Position to) {
+        return play(color, from, to, true);
+    }
+
+    private MoveRecord play(PlayerColor color, Position from, Position to, boolean byClock) {
         if (status != Status.IN_PROGRESS) {
             throw new IllegalStateException("the game is not in progress (status: " + status + ")");
         }
@@ -193,7 +209,7 @@ public final class Game {
 
         MoveRecord record = new MoveRecord(history.size() + 1, color, mover.id(), mover.rank(),
                 mover.isRevealed(), from, to, battle,
-                battle == null ? "moved to " + to.label() : battle.description());
+                battle == null ? "moved to " + to.label() : battle.description(), byClock);
         history.add(record);
 
         resolveOutcome(color, mover);
@@ -240,6 +256,29 @@ public final class Game {
             flagEscapeOwner = moverColor;
         }
         currentPlayer = moverColor.opponent();
+    }
+
+    /**
+     * {@code quitter} concedes the match, and the opponent wins on the spot.
+     *
+     * <p>The whole game, deployment included: a game nobody can leave is a game that waits
+     * forever the moment one of the two walks away, and the phase changes nothing about who
+     * concedes to whom. Two refusals, both of which would otherwise invent an opponent or
+     * a second result — before anyone has joined there is nobody to beat, and once the game
+     * is over its result is already decided (and filed).
+     *
+     * <p>Quitting the browser is deliberately not this: a dropped connection is not a
+     * decision, and a player whose phone slept has not conceded anything. Only an explicit
+     * resign ends a game this way.
+     */
+    public void resign(PlayerColor quitter) {
+        if (status == Status.WAITING_FOR_OPPONENT) {
+            throw new IllegalStateException("there is no opponent to concede to yet");
+        }
+        if (status == Status.FINISHED) {
+            throw new IllegalStateException("the game is already over");
+        }
+        declareWinner(quitter.opponent(), quitter + " left the game");
     }
 
     private void declareWinner(PlayerColor winner, String reason) {

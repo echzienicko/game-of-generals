@@ -4,6 +4,7 @@ import { api, ApiRequestError } from '../api/client'
 import { useGame } from '../state/GameContext'
 import { useLinkHandler } from '../routing'
 import type { LeaderboardEntry } from '../types'
+import { ThemeToggle } from './ThemeToggle'
 
 /**
  * The win table.
@@ -55,6 +56,7 @@ export function LeaderboardPage() {
   return (
     <main className="lobby">
       <header className="lobby__header">
+        <ThemeToggle />
         <h1>Scores</h1>
         <p className="lobby__tagline">
           Every game finished on this server, by name.

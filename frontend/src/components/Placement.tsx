@@ -4,7 +4,9 @@ import { useMeta, labelFor } from '../hooks/useMeta'
 import { deploymentZone, squareKey } from '../rules'
 import { PieceView } from './PieceView'
 import { ChatPanel } from './ChatPanel'
+import { LeaveButton } from './LeaveButton'
 import { opponentLabel } from '../seats'
+import { ThemeToggle } from './ThemeToggle'
 import type { Coordinate, Rank } from '../types'
 
 const FALLBACK_ROSTER: Record<Rank, number> = {
@@ -42,6 +44,38 @@ export function Placement() {
   const [board, setBoard] = useState<Map<string, Rank>>(() => new Map())
   const [holding, setHolding] = useState<Rank | null>(null)
 
+  /**
+   * Whether the server already has this player's army.
+   *
+   * <p>The authority on it, not the local map: this is what makes the deploy button settle
+   * into a confirmed state that survives a refresh, and what stops a player who comes back
+   * mid-deployment from being offered a second deployment the server would refuse with
+   * "RED has already deployed". Reading it here rather than remembering that a click
+   * succeeded is the difference between a check mark that is true and one that is hopeful.
+   */
+  const sent = game?.youPlaced === true
+
+  /*
+   * The camp as it should be drawn.
+   *
+   * <p>A refresh loses the local map, and an empty camp beside a settled button would say the
+   * player had deployed nothing. Your own pieces always carry their rank in the view, so
+   * when the server already holds the army and nothing has been arranged here, the camp is
+   * read from that board. Derived rather than written into state: an effect would paint an
+   * empty camp for a frame first, and could only ever be one render out of date. Only while
+   * the local map is empty, so it can never contradict pieces still being arranged.
+   */
+  const camp = useMemo(() => {
+    if (!sent || !game || board.size > 0) return board
+    const deployed = new Map<string, Rank>()
+    for (const square of game.board) {
+      if (square.owner === color && square.rank) {
+        deployed.set(squareKey(square.row, square.col), square.rank)
+      }
+    }
+    return deployed
+  }, [sent, game, board, color])
+
   const roster = useMemo<Record<string, number>>(
     () => meta?.roster ?? FALLBACK_ROSTER,
     [meta],
@@ -55,23 +89,27 @@ export function Placement() {
     for (const [rank, count] of Object.entries(roster)) {
       counts[rank as Rank] = count
     }
-    for (const rank of board.values()) {
+    for (const rank of camp.values()) {
       counts[rank] = (counts[rank] ?? 0) - 1
     }
     return counts
-  }, [roster, board])
+  }, [roster, camp])
 
-  const placed = board.size
+  const placed = camp.size
   const total = Object.values(roster).reduce((sum, n) => sum + n, 0)
-  const complete = placed === total
+  // `total > 0` is not decoration: a roster that had not arrived would otherwise count as a
+  // complete army of nothing and enable a deployment the server refuses.
+  const complete = total > 0 && placed === total
 
   function clickTray(rank: Rank) {
+    if (sent) return
     if ((remaining[rank] ?? 0) <= 0) return
     clearError()
     setHolding((current) => (current === rank ? null : rank))
   }
 
   function clickSquare(square: Coordinate) {
+    if (sent) return
     clearError()
     const key = squareKey(square.row, square.col)
     const existing = board.get(key)
@@ -90,6 +128,7 @@ export function Placement() {
   }
 
   function randomize() {
+    if (sent) return
     clearError()
     const pool: Rank[] = []
     for (const [rank, count] of Object.entries(roster)) {
@@ -111,14 +150,15 @@ export function Placement() {
   }
 
   function clear() {
+    if (sent) return
     clearError()
     setBoard(new Map())
     setHolding(null)
   }
 
   function ready() {
-    if (!complete) return
-    const pieces = [...board.entries()].map(([key, rank]) => {
+    if (!complete || sent) return
+    const pieces = [...camp.entries()].map(([key, rank]) => {
       const [row, col] = key.split(',').map(Number)
       return { row: row as number, col: col as number, rank }
     })
@@ -136,8 +176,10 @@ export function Placement() {
               <span className="side__name">{yourSeat}</span>
               <span className="side__color">{color}</span>
             </strong>{' '}
-            against {game ? opponentLabel(game) : 'them'}. Click a piece below, then a square in
-            your camp. Click a placed piece to pick it back up.
+            against {game ? opponentLabel(game) : 'them'}.{' '}
+            {sent
+              ? 'Your army is in and cannot be changed — nothing to do now but wait.'
+              : 'Click a piece below, then a square in your camp. Click a placed piece to pick it back up.'}
           </p>
         </div>
         <div className="placement__progress">
@@ -145,20 +187,49 @@ export function Placement() {
             {placed} / {total}
           </span>
           <div className="placement__actions">
-            <button type="button" className="btn" onClick={randomize} disabled={busy}>
+            <ThemeToggle />
+            <button type="button" className="btn" onClick={randomize} disabled={busy || sent}>
               Randomise
-            </button>
-            <button type="button" className="btn" onClick={clear} disabled={busy || placed === 0}>
-              Clear
             </button>
             <button
               type="button"
-              className="btn btn--primary"
-              onClick={ready}
-              disabled={!complete || busy}
+              className="btn"
+              onClick={clear}
+              disabled={busy || sent || placed === 0}
             >
-              {busy ? 'Sending…' : 'Ready'}
+              Clear
             </button>
+            {/*
+              Once the army is in, the button stops being a button and says so. The green is
+              the point: a deployment cannot be taken back, so waiting for the opponent on a
+              screen whose only button still reads "Ready" reads as something having gone
+              wrong. Disabled rather than styled as disabled, because there is genuinely
+              nothing left to press.
+            */}
+            {sent ? (
+              <button type="button" className="btn btn--done" disabled>
+                <span className="btn__tick" aria-hidden="true">
+                  ✓
+                </span>{' '}
+                Army placed
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn btn--primary"
+                onClick={ready}
+                disabled={!complete || busy}
+              >
+                {busy ? 'Sending…' : 'Ready'}
+              </button>
+            )}
+            {/*
+              Deployment is not a room you can be trapped in: the opponent who never
+              arranges an army would otherwise hold this screen hostage forever, since the
+              clock only runs once the game is live. Last in the row, and the same two-step
+              confirm as on the board, because it costs the game just the same.
+            */}
+            <LeaveButton />
           </div>
         </div>
       </header>
@@ -176,7 +247,7 @@ export function Placement() {
               <div className="board__row" key={row}>
                 {Array.from({ length: 9 }, (_, col) => {
                   const key = squareKey(row, col)
-                  const rank = board.get(key)
+                  const rank = camp.get(key)
                   return (
                     <button
                       type="button"

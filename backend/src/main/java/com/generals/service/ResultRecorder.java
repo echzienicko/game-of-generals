@@ -8,12 +8,15 @@ import org.springframework.stereotype.Component;
 /**
  * Puts a finished game's result into the {@link Leaderboard}, once.
  *
- * <p>This exists as its own component because a game is watched for its end from two
- * places: {@link GameManager} sees the human's turns and {@link BotOpponent} sees the
- * computer's, and the computer mutates {@link com.generals.domain.Game} directly rather
- * than through {@code GameManager.move}. Both call in here, and
- * {@link GameSession#claimResultFiling()} decides which of them actually scores it — so
- * exactly-once is one piece of logic instead of two agreeing by convention.
+ * <p>This exists as its own component because a game is watched for its end from four
+ * places: {@link GameManager} sees the human's turns (and {@code GameManager.resign}, which
+ * ends a game without a move at all), {@link BotOpponent} sees the
+ * computer's (and the computer mutates {@link com.generals.domain.Game} directly rather
+ * than through {@code GameManager.move}), and {@link TurnClock} sees whichever turn ran
+ * out of time. All of them call in here, and {@link GameSession#claimResultFiling()}
+ * decides which of them actually scores it — so exactly-once is one piece of logic
+ * instead of four agreeing by convention. A fifth watcher would not be a fifth copy of
+ * that logic; it would be a fifth caller, and that is the whole point of this class.
  *
  * <p>Callers are expected to hold the game's monitor when they invoke this, since the
  * check reads the status and the claim reads a flag.

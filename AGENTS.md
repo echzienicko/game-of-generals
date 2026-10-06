@@ -20,7 +20,7 @@ Progress and scope live in [`TODO.md`](TODO.md); how to start, test, and play th
 | Test (fast) | `mvn test` |
 | **Full check — run this** | `mvn clean verify` |
 
-`mvn clean verify` is the gate: 175 tests, must be green before any change is done. No network: use `-o`.
+`mvn clean verify` is the gate: 203 tests, must be green before any change is done. No network: use `-o`.
 
 Non-interactive shell — call toolchain by full path:
 
@@ -38,7 +38,7 @@ $HOME/.local/maven/bin/mvn -o clean verify
 
 - `npm run build` runs `tsc -b` then `vite build` — type-checks **including test files**.
 - `npm test` is `vitest run`; `npm run test:watch` for the loop.
-- `npm run lint` is `oxlint`. Two expected warnings in `state/GameContext.tsx` (`only-export-components`).
+- `npm run lint` is `oxlint`. One expected warning in `state/GameContext.tsx` (`only-export-components`).
 
 ## Running both halves
 
@@ -120,14 +120,16 @@ Windows Ethernet adapter is a **Public** network profile, hence the explicit fir
 
 13. **The bot plays with no rank knowledge, and that is correct.** Because nothing is revealed, every `isRevealed()` branch in `BotBrain` (lines 182, 224, 262, 317) is inert: the flag shortcut, the resolved-outright odds, the `outstandingEnemyRanks` subtraction and the beater-adjacency penalty all never fire. The bot scores every defender against the full 21-rank roster, which is the honest play — do **not** give the bot privileged knowledge to make it stronger; the invariant is in its own Javadoc. Consequence: bot-vs-bot games run long. The slowest of the eight seed pairs in `BotBrainTest.finishesGamesWithTheFogNeverLifted` needs 674 moves, so keep `MOVE_CAP` (1200) generous — a 400 cap reports slow games as stalls.
 
-14. **A game can finish on either path, and both must record the win.** `GameManager.move`
+14. **A game can finish on four paths, and all four must record the win.** `GameManager.move`
     mutates `Game` for a human turn; `BotOpponent.act` mutates the *same* `Game` directly
-    for the computer's turn, because the bot plays off the domain object. A win-detection
-    check written only in `GameManager` therefore silently drops every game the computer
-    won. `ResultRecorder` exists so exactly one piece of logic answers "has this game's
-    result been filed?" — `GameSession.claimResultFiling()` is a CAS that returns true once
-    per game, and both observers go through it. **Do not** call `leaderboard.recordResult`
-    from anywhere else.
+    for the computer's turn, because the bot plays off the domain object; `TurnClock.fire`
+    plays the turn that ran out; and `GameManager.resign` hands the game over to whoever
+    stayed. A win-detection check written only in `GameManager`
+    therefore silently drops every game the computer won, and every game a player won by
+    letting their clock run out. `ResultRecorder` exists so exactly one piece of logic
+    answers "has this game's result been filed?" — `GameSession.claimResultFiling()` is a
+    CAS that returns true once per game, and all four observers go through it. **Do not**
+    call `leaderboard.recordResult` from anywhere else.
 
 15. **Every seat is named, so all four seat-creating endpoints require a body.** `POST
     /api/games`, `/{id}/join`, `/matchmake` and `/vs-bot` take `{"name":"..."}` and answer
@@ -145,6 +147,115 @@ Windows Ethernet adapter is a **Public** network profile, hence the explicit fir
     replaced by an empty ledger, and unknown fields are ignored, because refusing to read a
     ledger from a later version would throw away every score in it.
 
+17. **The clock is on the server, and the move it plays is a *random* one.** A browser cannot
+    be trusted to notice its turn ended, and a browser that is not open cannot notice
+    anything, so a deadline in the client would freeze the game for both players the moment
+    one of them closed the tab — `TurnClock` exists so that cannot happen, and it keeps
+    running for a disconnected player on purpose. Two consequences that look like bugs:
+    - the expiry move is `BotDifficulty.RANDOM`, *not* the heuristic the computer plays
+      with. A player's own pieces playing better for them every time they think too long
+      would turn a forgotten tab into an advantage; a random move is legal, so the game
+      always continues, and the log says who let it go.
+    - the clock is armed by whoever changed the game, not by a timer: `GameManager.move`,
+      `GameManager.submitPlacement` and `BotOpponent.act` each call `clock.onChange`
+      **before** building the view they return, or the view that goes out carries the
+      previous turn's deadline. It clears itself for a finished game, in placement and on
+      the computer's turn (`session.botFor(current).isEmpty()`), because a countdown to
+      nothing is worse than none.
+
+    The view carries `turnDeadlineMillis` as an **absolute instant** (plus `turnSeconds` for
+    the bar) rather than a number of seconds: the client must never keep a countdown of its
+    own, because a push delayed in transit would then lengthen the turn. `GameSession`
+    holds the duration alongside the deadline (`armTurnClock(deadline, seconds)`) so
+    `GameViewMapper` can draw a bar without knowing the configuration. What the client does
+    trust is that its clock agrees with the server's — nothing in the payload says what time
+    it was on the server, so a machine whose clock is minutes out shows a number that is
+    minutes out. That is a known limit, not an oversight; `MoveClock` calls `Date.now()`
+    during render and suppresses `react(purity)` for it deliberately, because the
+    alternative is a stale reading for a tick, which puts "119s" on a 60-second turn.
+
+    In the UI the countdown is `role="timer"` with `aria-live="off"` and a label inside it
+    ("Time left on your move"). **Do not** move it into the `role="status"` banner: a live
+    region that says a second is a live region nobody can listen to.
+
+18. **A server already on `:8080` will happily answer for the build you just made.**
+    `browser-run.sh` used to boot the jar, poll `/api/meta` and trust a `yes`. A leftover
+    `mvn spring-boot:run` — a maven classpath on the command line, invisible to
+    `pkill -f generals` — answers that poll perfectly well, so every check runs against
+    yesterday's build and reports `ALL CHECKS PASSED`. It cost a full clock-harness run to
+    notice: `turnDeadlineMillis` was `undefined` in a payload the jar demonstrably had. The
+    script now takes both ports **by pid** (`ss -ltnpH "sport = :$port"`), kills whatever is
+    there, refuses to continue unless the listener on 8080 is the pid it launched, and
+    checks that whatever holds 5173 really is `node .../node_modules/.bin/vite`. Same
+    lesson as trap 3 in the browser-bug list below: a check that cannot tell its own process
+    from a stranger's is not a check. If you boot the backend by hand, look at
+    `ss -ltnp 'sport = :8080'` first.
+
+19. **The difficulty is a choice the player makes, so it is in the view — and it is the only
+    thing about the opponent that is.** `SeatDto` carries `difficulty`, null on a human's
+    seat, and the frontend names the seat from it (`Computer (Hard)`). That is not a fog-of-war
+    leak: the level came in on `POST /api/games/vs-bot?difficulty=` and the fog is about
+    `Square.rank`, not about who is sitting opposite you. What *is* load-bearing is that the
+    picker opens on `LEARNING`, because that is what `BotDifficulty.parse(null)` returns — a
+    client defaulting to something else would quietly play a different game from the one a
+    bare `curl` serves. `src/bot.ts` holds the three levels and their wording, kept out of
+    the component file for the same reason `seats.ts` is (`only-export-components`).
+
+    A vs-bot game is **not** a waiting-room game: `createAgainstBot` seats both sides and
+    calls `beginPlacement()` before it returns, and the client calls `seat(result)` — the
+    same path `create`, `join` and `matchmake` use — so there is nothing to add when a new
+    way into a game appears. Any check that stops in `WAITING_FOR_OPPONENT` here is a check
+    that would wait forever: `bot-e2e.mjs` asserts the placement screen appears and that no
+    game code is ever shown.
+
+20. **A deployment cannot be taken back, so the client asks the server whether it happened.**
+    `GameStateDto.youPlaced` is per-viewer (`game.hasPlaced(viewer)`) and null nowhere — it is
+    a `boolean`, so the settled state of the deploy button is driven by it and not by
+    remembering that a click succeeded. Two things follow, and both were bugs first:
+    - **the tick is green because a deployment cannot be undone.** `btn--done` gets its own
+      `--done-bg`/`--done-hover` pair per theme rather than reusing `--ok`, because white on
+      `--ok` is 3.06:1 on the dark theme and 4.30:1 on the light one. The dark hover goes
+      *darker* (`#1a6b38`, 6.55:1) where the red primary's goes lighter: a plate carrying
+      white text cannot afford to lighten.
+    - **a refresh loses the local camp map**, so `Placement` derives the camp it draws rather
+      than writing it into state in an effect: when the server holds the army and nothing is
+      arranged locally, the pieces are read out of the view (your own pieces always carry
+      their rank) instead of an empty camp appearing beside a settled button. It is also why
+      `complete` is `total > 0 && placed === total` — a roster that had not arrived would
+      otherwise count as a complete army of nothing.
+
+    `Randomise`, `Clear` and the camp squares are all inert once the army is in. Leaving them
+    live would let a player rearrange an army the server already holds and press a button the
+    server refuses with `RED has already deployed` (400). In a game against the computer the
+    green state is never seen — the game starts the instant the army lands — which is why
+    `browser-e2e.mjs` stages red first and reads the button while blue is still deploying.
+
+21. **Leaving is an explicit act, and it hands the win to whoever stayed.**
+    `POST /api/games/{id}/resign` (token header, no body) is the only way a game ends early.
+    A closed tab, a dropped socket or a restart does **not** forfeit: `TurnClock` keeps
+    playing for whoever is still there, and the waiting room's `Cancel` stays client-only —
+    there is nothing to concede to yet, so `Game.resign` refuses `WAITING_FOR_OPPONENT`
+    (and an already-`FINISHED` game) with `IllegalStateException` → 409. Four things there
+    are decisions, not implementation detail:
+    - **the reason is built from the seat, never from the request.**
+      `Game.resign(color)` calls `declareWinner(color.opponent(), color + " left the game")`,
+      and that string is what both end screens and the log show.
+    - **it is watcher four.** `GameManager.resign` locks the same `session.game()` monitor
+      as every other mutation, takes `wasOver` *before* the game changes so
+      `results.fileIfFinished` still decides, then calls `clock.onChange` (a finished game
+      must not get a random expiry move) and `broadcaster.broadcast`. See trap 14.
+    - **the client asks first.** `LeaveButton` is two steps — `Leave` swaps the plate for
+      "Leave and lose the game?" with `Yes, leave` / `Stay` — and it sits in two places: the
+      board header during play and beside the Ready button in `Placement`, because a game can
+      be resigned while the army is still being arranged. The response is an ordinary
+      `GameStateDto` with `status: FINISHED`, so `App.tsx` routes it to `GameScreen` and
+      `GameOver` draws over the board; the session is kept on purpose and leaving is the
+      overlay's *Back to lobby*, not the button that conceded.
+    - **the second press must be harmless.** A `LeaveButton` still on screen after the game
+      has already ended (by flag, by clock or by the opponent's own resignation) gets 409 and
+      must leave the result alone — the `applyUnlessPushed` path in `GameContext.resign`
+      keeps the refusal in the error slot rather than rolling anything back.
+
 ## Testing philosophy
 
 Server is authoritative. Client's `applyQuietMove` only guesses moves onto **empty** squares; battles wait for push — client never keeps second copy of precedence rules. One move in flight at a time; refusal on `/user/queue/errors` rolls board back to saved pre-move state.
@@ -153,14 +264,47 @@ Add tests at the level that owns the rule: `rules.ts`/components for client logi
 
 ## Verified so far
 
-- 175 backend tests, 86 frontend tests, type-check, lint, production build.
+- 203 backend tests, 134 frontend tests, type-check, lint, production build.
 - LAN path verified from Windows over the Windows LAN address (192.168.254.53), through the
   portproxy relay: `/api/meta` 200, `/` 200, `/lobby` 200, `/ws/info` 200 (SockJS
   negotiation), `POST /api/games` 201 with a live gameId, dev server `:5173` 200, and a
   proxied `POST /api/games` with `Origin: http://172.24.223.0:5173` 201 — that last one is
   the check that would have caught a CORS wall on the dev-server path.
 - Wire-level harness (`/tmp/opencode/e2e.mjs`, 38 checks; both seats named, and it asserts a nameless `POST /api/games` is 400) plays complete 44-move game over two real STOMP sessions; checks per-user pushes, fog of war across 11 battles, illegal move rejection. `/tmp/opencode/errs.mjs` (15 checks) covers `/user/queue/errors`.
-- Browser harness (`tools/browser-e2e.mjs`, 86 checks) plays complete game in two real Chromium windows via UI. Run with `tools/browser-run.sh` (boots jar + dev server). First run `tools/install-browser.sh` (no sudo — Chromium + libs installed to `/tmp/opencode/browser`).
+- Browser harness (`tools/browser-e2e.mjs`, 138 checks) plays complete game in two real Chromium windows via UI. Run with `tools/browser-run.sh` (boots jar + dev server). First run `tools/install-browser.sh` (no sudo — Chromium + libs installed to `/tmp/opencode/browser`).
+- Playing the computer re-verified at every layer: `GameApiTest` (4 tests — the seat says how
+  hard it was asked to play, `LEARNING` is what a game with no level asked for gets, an
+  unknown level is a 400 that lists the three, and the computer still has no name), 8
+  `App.test.tsx` tests over the lobby card, and `tools/bot-e2e.mjs` (26 checks, run as
+  `BOT_ONLY=1 tools/browser-run.sh`): all three levels offered, the picker on Hard, the hint
+  following the picker, a straight line to deployment with no game code, the opponent shown
+  as *Computer (Easy)*, the level the server is playing matching the one chosen, the computer
+  deploying itself with its ranks as hidden as yours, red on a clock, the computer answering a
+  move with nothing clicked and handing the turn back, the log naming BLUE as the mover, its
+  move still revealing nothing, and four cards with a `<select>` not scrolling sideways at
+  360px.
+- The settled deploy button verified at every layer: `GameApiTest` (`youPlaced` is about the
+  viewer — true for the player who deployed, false for the one who has not), 5
+  `App.test.tsx` tests (green with a tick from the server's answer rather than the click,
+  surviving a refresh with the camp rebuilt, no second deployment offered), and the browser
+  harness: red deploys first, so the button is read while blue is still arranging — resolved
+  `rgb(31, 122, 63)` under white text with a `.btn__tick` inside, 5.37:1 on the green in dark
+  and 6.51:1 in light (each theme needs its own `--done-bg`; white on `--ok` would not do),
+  Randomise and Clear inert, the hint saying the army cannot be changed, blue's button
+  untouched, and all 21 pieces still on show. Reading that colour the instant the button
+  appears caught a mid-transition blend of the red primary and the green — a value in neither
+  palette — so the harness waits for two readings that agree.
+- The clock re-verified at every layer, including a real browser: `TurnClockTest` (10 tests
+  that wait on genuine expiry with a one-second clock — a legal random move is played, the
+  turn hands on, a move made in time is never replaced, a stale expiry is turned away, the
+  computer is never timed, and a timed-out move that takes the flag is filed exactly once),
+  `GameApiTest` and `GameSocketIntegrationTest` on the deadline in the payload, and
+  `tools/clock-e2e.mjs` (27 checks, run as `CLOCK_ONLY=1 tools/browser-run.sh`, which boots
+  the jar with `--generals.turn-seconds=5` and leaves one window alone): the countdown reaches
+  the number the server's own deadline implies, no clock is drawn in the waiting room or
+  during placement, the board moves with nothing clicked, both logs say *ran out of time*,
+  the clock says *your move* in one window and *their move* in the other at the same moment,
+  and **closing a tab does not stall the game** — the clock plays for whoever left.
 - Chat and names re-verified at every layer: `GameApiTest` (8 tests — shared between
   players, author taken from the seat, waiting room, validation, token required, the
   100-line cap, seats carrying names, bot seat nameless) and `GameSocketIntegrationTest`
@@ -172,11 +316,37 @@ Add tests at the level that owns the rule: `rules.ts`/components for client logi
 - Names shown where a colour used to be: browser harness asserts both names in
   `.game__identity` and on the `.strength` bar, the waiting banner names the player you are
   waiting for, and the game-over line reads *against Rival*.
+- Both themes re-verified in a real browser, because jsdom loads no stylesheet and has no
+  `matchMedia`: 19 checks that read what Chromium resolved. `colorScheme: 'dark'` on both
+  windows gives 15.5:1 body text; the switch gives 14.4:1 on `#eef1f4`; the primary button is
+  white-on-red in both (4.56:1 / 5.43:1); a refresh comes back light without a dark frame; a
+  fresh context that prefers light comes up light **with nothing written to
+  `localStorage`** — the OS is being followed, not a default being stored. On the board: the
+  empty square repaints, your own half stays distinct, the face-down hatch goes from a dark
+  slab to a light one, and a face-up piece keeps a byte-identical gradient in both themes
+  (sampling one is a trap — a hidden enemy piece also carries `piece--blue`, and its hatch is
+  *supposed* to change). One player switching does not move the other's page. Screenshots:
+  `/tmp/opencode/browser-lobby-light.png`, `/tmp/opencode/browser-board-light.png`.
 - Fog of war re-verified after the battle-reveal fix, at every layer: wire harness sees
   `peak 0` enemy ranks across 11 battles and per-viewer `BattleDto` redaction; browser
   harness sees the overlay read `5-Star General vs Unknown` with the caption `your piece
-  holds the square and an unidentified enemy piece is destroyed`, and `21 still hidden, 0
-  revealed` for the losing player at the end.
+   holds the square and an unidentified enemy piece is destroyed`, and `21 still hidden, 0
+   revealed` for the losing player at the end.
+- Leaving re-verified at every layer: `GameTest` (`leaving the game`, 4 — the opponent
+  wins, a waiting room has nobody to hand a win to, resigning after the end is refused, a
+  pending flag escape is cancelled with it), `GameApiTest` (4 — the win reaches both views,
+  the clock stops, a waiting room and a foreign token are 409),
+  `GameManagerLeaderboardTest` (4 — the resignation is filed under the right name, filed
+  exactly once, refused in a waiting room, and losing to the computer counts as a loss),
+  4 `App.test.tsx` tests (the two-step prompt, the refusal reported without rolling
+  anything back, and the same way out from the deployment screen), and
+  `tools/browser-e2e.mjs`: the confirm plate appears in a fresh game with nothing ended
+  behind it, reads 4.56:1 on `rgb(208, 69, 62)` on its own, `Stay` backs out with
+  deployment still up, the deployment screen still does not scroll sideways at 360px
+  (`360px of content in 360px`), and a whole second game played to a resignation ends
+  `Victory` for the player who stayed and `Defeat` for the one who left, with *BLUE left the
+  game* on both screens, *Recorded as a win for Red.* on the ledger line, and both rows on
+  `/api/leaderboard` reading `gamesPlayed: 2`.
 
 ## Traps the tests did not catch (browser-only bugs)
 
@@ -232,6 +402,42 @@ These broke the app in a browser while all unit/integration tests stayed green (
    guard nobody asked for. The client keeps its own `sendingChat`/`chatError` state rather
    than routing through `run()`, because a failed chat must not roll the board back to a
    saved pre-move snapshot — no move was made.
+
+6. **A theme is one attribute, and any colour written outside the palette block is a bug in
+   waiting.** `styles.css` declares every colour as a custom property in `:root`, and
+   `:root[data-theme='light']` replaces the set; `state/theme.ts` sets the attribute and
+   `ThemeToggle` flips it. Four things there are decisions, not implementation detail:
+   - **no colour is written in a rule further down.** The light theme started life with a
+     `.field input` still painted `#10151a`, which is how a light page ends up with one dark
+     box on it. If you need a colour, add a token.
+   - **the team colours are deliberately not tokens.** A red piece is red because it is red on
+     a board, not because of the time of day; recolouring them would change what the board
+     means. `browser-e2e.mjs` checks a face-up piece keeps the identical gradient in both
+     themes.
+   - **the `--*-soft` tokens are text, and they flip direction.** In the dark theme they are
+     pale tints; on white they must be dark, so light's `--red-soft` is `#a3271f`, not a pale
+     pink. A `rgba()` wash under them is composited over `--surface` for the same reason.
+   - **the primary button sets `color: #fff` itself.** It used to inherit `var(--text)`,
+     which is 3.0:1 ink-on-red the moment the theme flips.
+
+   `installTheme()` runs in `main.tsx` **before** the first render and the built CSS is a
+   `<link>` in `<head>`, so the first paint is already correct — no inline script in
+   `index.html` and no flash. Do not move that call into a component: it is a module-level
+   side effect by design. `ThemeToggle` reads the theme back off `<html>` rather than keeping
+   its own copy, so a test that sets `dataset.theme` before rendering sees a toggle that
+   agrees with the page.
+
+   **Chromium prefers light.** A browser harness that does not pin `colorScheme` is testing a
+   light-mode app and will call it dark; both contexts in `browser-e2e.mjs` pass
+   `colorScheme: 'dark'` and a third context with `'light'` and empty storage is what proves
+   the OS is followed at all. Squares transition over 120ms, so a reading taken right after a
+   switch catches a board mid-transition and proves nothing — `settled()` polls until the
+   computed colour stops changing.
+
+   The one deliberate contrast compromise: `.square__coord` (the row/column letters at 0.6rem)
+   sits near 2.5–2.8:1 in both themes. It is incidental text that duplicates each square's
+   `aria-label`, and 4.5:1 would mean bright lettering on all 72 squares. `--faint`
+   (".log__empty" / ".chat__empty" — real sentences) was raised to clear 4.5:1 instead.
 
 - Win table re-verified after the leaderboard work, at every layer: `LeaderboardTest` (22
   tests over naming, tallying, streaks, ordering and the file), `GameManagerLeaderboardTest`

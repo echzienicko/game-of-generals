@@ -3,11 +3,14 @@ import { Board } from './Board'
 import { LogPanel } from './LogPanel'
 import { opponentLabel, yourLabel } from '../seats'
 import { BattleOverlay } from './BattleOverlay'
+import { ThemeToggle } from './ThemeToggle'
+import { MoveClock } from './MoveClock'
 import { GameOver } from './GameOver'
+import { LeaveButton } from './LeaveButton'
 import { isYourTurn } from '../rules'
 
 export function GameScreen() {
-  const { game, session, connected, error, clearError, leaveGame, selected } = useGame()
+  const { game, session, connected, error, clearError, selected } = useGame()
   if (!game) return null
 
   const yourTurn = isYourTurn(game)
@@ -48,12 +51,12 @@ export function GameScreen() {
           </code>
         </div>
         <div className="game__controls">
+          <MoveClock game={game} />
+          <ThemeToggle />
           <span className={`conn conn--${connected ? 'on' : 'off'}`}>
             {connected ? 'live' : 'offline'}
           </span>
-          <button type="button" className="btn btn--ghost" onClick={leaveGame}>
-            Leave
-          </button>
+          <LeaveButton />
         </div>
       </header>
 

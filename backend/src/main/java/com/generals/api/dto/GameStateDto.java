@@ -13,10 +13,31 @@ public record GameStateDto(
         String status,
         String youAre,
         boolean opponentIsBot,
+        /**
+         * Whether the player reading this view has sent their army in.
+         *
+         * <p>Per-viewer, and about the viewer's own deployment rather than the opponent's:
+         * it is what turns the deploy button into a settled, confirmed state, and it is the
+         * only thing that survives a refresh mid-deployment. The opponent's side is not
+         * answered here — the board already shows their camp filling up, which is all a
+         * player is ever told about it.
+         */
+        boolean youPlaced,
         String currentPlayer,
         String winner,
         String winReason,
         boolean flagEscapePending,
+        /**
+         * When the move on the clock falls due, in epoch milliseconds, or null when no clock
+         * is running.
+         *
+         * <p>The same for both players, since both are watching the same turn. Sent as an
+         * absolute moment rather than a number of seconds so a clock does not drift: the
+         * client subtracts from its own clock and is corrected by every push.
+         */
+        Long turnDeadlineMillis,
+        /** How many seconds a move is given; 0 when the clock is switched off. */
+        long turnSeconds,
         int turnNumber,
         int rows,
         int cols,

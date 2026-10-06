@@ -131,10 +131,13 @@ All in `backend/src/main/java/com/generals/domain/`.
         100 lines kept, allowed in the waiting room too. The computer neither has a name
         nor answers.
   - [x] **Opponent's name on screen.** `GameStateDto.seats` carries
-        `[{color,name,bot,you}]`, so the header, the strength bar, the waiting banner and
-        the game-over line say *who* you are playing rather than only which colour you
-        are. The name was chosen at seat time and cannot be rewritten mid-game, which is
-        what makes it safe to put on the wire beside a board that hides every rank.
+        `[{color,name,bot,you,difficulty}]`, so the header, the strength bar, the waiting
+        banner and the game-over line say *who* you are playing rather than only which
+        colour you are. The name was chosen at seat time and cannot be rewritten mid-game,
+        which is what makes it safe to put on the wire beside a board that hides every rank.
+        `difficulty` is the computer's level and null for a person — the player chose it on
+        the way in, so the board can read *Computer (Hard)* and a refresh leaves you knowing
+        what you are up against. It is not a rank and cannot become one.
 - [x] WebSocket (STOMP over SockJS) at `/ws`:
   - [x] `/user/queue/game/{id}` — **per-player** state pushes (not a shared topic).
   - [x] `/app/game/{id}/move` and `/app/game/{id}/placement` — inbound actions.
@@ -169,14 +172,33 @@ All in `backend/src/main/java/com/generals/domain/`.
         away every score in it.
   - [x] The computer's seat has no name, so it has no row — a human's win against the bot
         counts and the bot's wins do not pollute the table.
-  - [x] Filed exactly once per game. A game can end on either path (`GameManager.move`
-        mutates `Game` for a human, `BotOpponent` mutates the same object for the bot), so
-        `ResultRecorder` and a CAS in `GameSession.claimResultFiling()` make exactly-once a
-        property of the session rather than something two observers must agree on.
-- [x] Tests: **166 total passing** (`mvn clean verify`) — 63 domain + 21 HTTP + 5 socket +
-      37 leaderboard/service. The HTTP win-rate test reads its own row first and asserts a
-        change, because the ledger under `target/` is a real file and survives the run
-        before it.
+  - [x] Filed exactly once per game. A game can end on **three** paths (`GameManager.move`
+        mutates `Game` for a human, `BotOpponent` mutates the same object for the bot, and
+        `TurnClock` plays the turn that ran out), so `ResultRecorder` and a CAS in
+        `GameSession.claimResultFiling()` make exactly-once a property of the session rather
+        than something three observers must agree on.
+- [x] **Move timer** (`TurnClock`) — the server ends a turn that runs out, and plays for the
+      player who let it:
+  - [x] 60 seconds a move, `--generals.turn-seconds` to change it, `0` for an untimed game
+        (nothing moves itself, no countdown is sent).
+  - [x] On the server, because a closed browser cannot notice anything: the clock keeps
+        running when a tab is shut, so an abandoned game carries on instead of hanging.
+  - [x] The expiry move is a **random legal** one, not the computer's heuristic. Thinking
+        longer must not make your own pieces play better for you.
+  - [x] Never on the computer's turn, never in placement, never after the end — a countdown
+        to nothing is worse than none.
+  - [x] The view carries the deadline as an **absolute instant** plus the length of the
+        turn, so a push that arrives late cannot lengthen the turn and the client never has
+        to keep a countdown of its own.
+  - [x] Marked in the move log for both players (`… ran out of time`), and it reveals
+        nothing: a clock move is an ordinary move as far as the fog of war is concerned.
+  - [x] A move made in time cancels the clock, and an expiry that wakes up after the turn
+        has moved on leaves the game alone.
+- [x] Tests: **190 total passing** (`mvn clean verify`) — the domain, plus 47 service (12 of
+      them play whole games for the ledger, 10 are the clock and wait on real expiry) and 37
+      over HTTP and the socket (4 of them about the computer's level). The HTTP win-rate test reads its own row first and asserts a
+      change, because the ledger under `target/` is a real file and survives the run before
+      it.
 
 **Verified against a running server:** create → join → both deploy → alternating moves →
 battle resolves correctly → fog of war holds → illegal moves rejected with clear messages.
@@ -186,6 +208,11 @@ battle resolves correctly → fog of war holds → illegal moves rejected with c
 ## 5. Frontend — Core UI
 
 - [x] Lobby screen: create game, join by id, waiting-for-opponent state.
+  - [x] **Play the computer**, on a card of its own with a difficulty picker (Easy / Normal /
+        Hard, each with a sentence saying what it does), opening on Hard because that is what
+        the server serves when no level is asked for. It goes straight to deployment: both
+        seats are seated before the endpoint answers, so there is no code to share and no
+        waiting room to sit in.
 - [x] Placement screen: drag-and-drop 21 pieces into your 3-row zone, confirm.
 - [x] Game board component (8 rows x 9 cols) rendering:
   - [x] Own pieces face-up.
@@ -197,10 +224,26 @@ battle resolves correctly → fog of war holds → illegal moves rejected with c
       abbreviation, which stays. A face-down piece gets **no** emblem at all — the pips
       vary by rank, so one would hand the rank straight over.
 - [x] Turn indicator, captured-piece trays, move log.
+- [x] **Turn clock.** A countdown in the board's header, drawn from the deadline the server
+      sends (`turnDeadlineMillis` + `turnSeconds`) rather than counted by the client, with a
+      bar behind the number, a warning tone inside the last ten seconds and an urgent one at
+      zero. `role="timer"` with the announcement off, so it is there to be read on purpose
+      rather than once a second. No clock is drawn when none is running — before deployment,
+      on the computer's turn, or after the game — which is the server saying so, not the
+      client guessing.
 - [x] Battle result modal/animation showing the outcome; the opponent's piece reads
       "Unknown" and the caption names no ranks.
 - [x] Victory/defeat screen with rematch option.
-- [x] Responsive layout + basic theming.
+- [x] Responsive layout.
+- [x] **Light and dark themes.** One attribute on `<html>` and one palette block per theme
+      in `styles.css`; `state/theme.ts` owns the choice. It follows the operating system
+      until the reader picks a side (`prefers-color-scheme`), remembers that in
+      `localStorage` under `generals.theme`, and applies it in `main.tsx` before the first
+      render, so there is no flash. `color-scheme` is declared with the palette so
+      scrollbars and form controls follow too. The switch sits in each screen's own header
+      rather than pinned over the page — on the board it would sit on top of the controls.
+      The team colours are deliberately unchanged between themes: a red piece is red because
+      it is red on a board.
 - [x] Name gate: asked once, on the first visit, then remembered in the browser
       (`generals.player`). No account, no password — two people playing under one name on
       one server share a row, which is the point.
@@ -278,8 +321,13 @@ battle resolves correctly → fog of war holds → illegal moves rejected with c
 
 ## 8. Stretch Goals (post-MVP)
 
-- [x] AI opponent (random legal moves, heuristic scoring, counting opening memory for learning, and REST endpoint `POST /api/games/vs-bot`).
+- [x] AI opponent (random legal moves, heuristic scoring, counting opening memory for
+      learning, and REST endpoint `POST /api/games/vs-bot`), reachable from the lobby — the
+      level is chosen there, and the game it starts is the same game the endpoint serves.
 - [x] Deployment (frontend built and packaged as static resources inside the Spring Boot jar with SPA routing fallback).
+  - [x] The deploy button settles: per-viewer `GameStateDto.youPlaced` makes it a green,
+        ticked, inert "Army placed" state (not a button that can be pressed twice), and a
+        refresh rebuilds the camp from the server instead of showing an empty one.
 - [x] Playable over the LAN from a phone or second laptop.
   - The SPA ships inside the jar and the client only requests relative `/api` + `/ws`, so
     the whole game is one origin on `:8080` — no CORS, no proxy, nothing to configure on
@@ -293,6 +341,9 @@ battle resolves correctly → fog of war holds → illegal moves rejected with c
     `wsl --shutdown`, because the relay points at a literal WSL address.
 - [x] Persistent win table by player name (see §4) — done without accounts, by making the
       name the key and accepting that a name is not a login.
+- [x] **Move timer** (see §4): the server ends a turn that runs out and plays a random legal
+      move for the player on the clock, so an abandoned game keeps going instead of hanging
+      on a tab that was closed. Off with `--generals.turn-seconds=0`.
 - [ ] Persistent game history (database + JPA).
 - [ ] User accounts / authentication.
 - [ ] Spectator mode.

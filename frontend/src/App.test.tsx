@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
@@ -7,19 +7,28 @@ import type { GameSocket, GameSocketHandlers } from './api/socket'
 import { OFFICER_ORDER, OFFICER_PIPS } from './emblems'
 import { PieceView } from './components/PieceView'
 import { RANK_LABELS, RANK_SHORT } from './hooks/useMeta'
-import { conceal, makeBattle, makeGame, resetPieceIds } from './test/factories'
+import {
+  FULL_ARMY,
+  TEST_META,
+  conceal,
+  makeBattle,
+  makeGame,
+  resetPieceIds,
+} from './test/factories'
 import type { GameState, Rank } from './types'
 
 const apiMock = vi.hoisted(() => ({
   create: vi.fn(),
   join: vi.fn(),
   matchmake: vi.fn(),
+  vsBot: vi.fn(),
   state: vi.fn(),
   placement: vi.fn(),
   move: vi.fn(),
   chat: vi.fn(),
   meta: vi.fn(),
   leaderboard: vi.fn(),
+  resign: vi.fn(),
 }))
 
 let handlers: GameSocketHandlers | null = null
@@ -82,18 +91,16 @@ beforeEach(() => {
   resetPieceIds()
   handlers = null
   localStorage.clear()
+  // the theme lives on <html>, which survives a localStorage.clear()
+  delete document.documentElement.dataset.theme
   // most of these tests are about a game in progress, which is past the name gate
   localStorage.setItem('generals.player', 'Tester')
   // the pathname outlives a test, and two of the screens are chosen by it
   window.history.pushState({}, '', '/')
   for (const mock of Object.values(apiMock)) mock.mockReset()
-  apiMock.meta.mockResolvedValue({
-    rows: 8,
-    cols: 9,
-    armySize: 21,
-    ranks: [],
-    roster: {},
-  })
+  // A real roster, not a stub: useMeta caches the first answer it sees for the whole file, so
+  // an empty roster here would leave the deployment tray empty for every later test.
+  apiMock.meta.mockResolvedValue(TEST_META)
   apiMock.leaderboard.mockResolvedValue({ entries: [], totalPlayers: 0 })
 })
 
@@ -215,8 +222,8 @@ describe('whose army is whose', () => {
     await renderInGame(
       playingGame({
         seats: [
-          { color: 'RED', name: 'Tester', bot: false, you: true },
-          { color: 'BLUE', name: 'Rival', bot: false, you: false },
+          { color: 'RED', name: 'Tester', bot: false, you: true, difficulty: null },
+          { color: 'BLUE', name: 'Rival', bot: false, you: false, difficulty: null },
         ],
         currentPlayer: 'BLUE',
       }),
@@ -230,18 +237,34 @@ describe('whose army is whose', () => {
     expect(document.querySelector('.strength')).toHaveTextContent('Rival')
   })
 
-  it('calls the computer the computer, and keeps your own name', async () => {
+  it('calls the computer the computer, names the level, and keeps your own name', async () => {
     await renderInGame(
       playingGame({
         seats: [
-          { color: 'RED', name: 'Tester', bot: false, you: true },
-          { color: 'BLUE', name: null, bot: true, you: false },
+          { color: 'RED', name: 'Tester', bot: false, you: true, difficulty: null },
+          { color: 'BLUE', name: null, bot: true, you: false, difficulty: 'HEURISTIC' },
         ],
         currentPlayer: 'BLUE',
       }),
     )
 
-    expect(screen.getByRole('status')).toHaveTextContent(/waiting for computer to move/i)
+    expect(screen.getByRole('status')).toHaveTextContent(/waiting for computer/i)
+    // the level beside the name: a player who refreshes mid-game can still tell which of
+    // the three they started
+    expect(screen.getAllByText('Computer (Normal)').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Tester').length).toBeGreaterThan(0)
+  })
+
+  it('calls the computer the computer even when no level came with the seat', async () => {
+    await renderInGame(
+      playingGame({
+        seats: [
+          { color: 'RED', name: 'Tester', bot: false, you: true, difficulty: null },
+          { color: 'BLUE', name: null, bot: true, you: false, difficulty: null },
+        ],
+      }),
+    )
+
     expect(screen.getAllByText('Computer').length).toBeGreaterThan(0)
   })
 
@@ -268,8 +291,8 @@ describe('whose army is whose', () => {
       makeGame([], {
         status: 'PLACEMENT',
         seats: [
-          { color: 'RED', name: 'Tester', bot: false, you: true },
-          { color: 'BLUE', name: 'Rival', bot: false, you: false },
+          { color: 'RED', name: 'Tester', bot: false, you: true, difficulty: null },
+          { color: 'BLUE', name: 'Rival', bot: false, you: false, difficulty: null },
         ],
       }),
     )
@@ -329,6 +352,155 @@ describe('routing by game status', () => {
       h.onState({ ...playingGame(), status: 'FINISHED', winner: 'BLUE', winReason: 'BLUE took your flag' }),
     )
     expect(screen.getByRole('dialog')).toHaveTextContent('Defeat')
+  })
+})
+
+describe('leaving a live game', () => {
+  /** What the server answers a resignation: the finished game, won by the other side. */
+  function lostByResigning(): GameState {
+    return {
+      ...playingGame(),
+      status: 'FINISHED',
+      winner: 'BLUE',
+      winReason: 'RED left the game',
+      currentPlayer: null,
+    }
+  }
+
+  it('asks before it concedes, and the first press does nothing', async () => {
+    const user = userEvent.setup()
+    await renderInGame(playingGame())
+
+    await user.click(screen.getByRole('button', { name: 'Leave' }))
+
+    expect(await screen.findByText('Leave and lose the game?')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Yes, leave' })).toBeInTheDocument()
+    expect(apiMock.resign).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole('button', { name: 'Stay' }))
+
+    expect(screen.queryByText('Leave and lose the game?')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Leave' })).toBeInTheDocument()
+    expect(apiMock.resign).not.toHaveBeenCalled()
+  })
+
+  it('concedes to the server and shows the defeat it decided', async () => {
+    const user = userEvent.setup()
+    apiMock.resign.mockResolvedValue(lostByResigning())
+    await renderInGame(playingGame())
+
+    await user.click(screen.getByRole('button', { name: 'Leave' }))
+    await user.click(screen.getByRole('button', { name: 'Yes, leave' }))
+
+    expect(apiMock.resign).toHaveBeenCalledWith(SESSION.gameId, SESSION.token)
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog).toHaveTextContent('Defeat')
+    expect(dialog).toHaveTextContent('RED left the game')
+    // the seat is kept so the player sees what leaving cost them; the lobby comes next
+    expect(JSON.parse(localStorage.getItem('generals.session') ?? 'null')).not.toBeNull()
+  })
+
+  it('offers the same way out during deployment', async () => {
+    const user = userEvent.setup()
+    await renderInGame(makeGame([], { status: 'PLACEMENT' }))
+
+    await user.click(screen.getByRole('button', { name: 'Leave' }))
+    expect(await screen.findByText('Leave and lose the game?')).toBeInTheDocument()
+    expect(apiMock.resign).not.toHaveBeenCalled()
+
+    apiMock.resign.mockResolvedValue(lostByResigning())
+    await user.click(screen.getByRole('button', { name: 'Yes, leave' }))
+
+    expect(apiMock.resign).toHaveBeenCalledTimes(1)
+    expect(await screen.findByRole('dialog')).toHaveTextContent('Defeat')
+  })
+
+  it('reports a refusal from the server and leaves the game as it was', async () => {
+    const user = userEvent.setup()
+    apiMock.resign.mockRejectedValue(new ApiRequestError(409, 'the game is already over'))
+    await renderInGame(playingGame())
+
+    await user.click(screen.getByRole('button', { name: 'Leave' }))
+    await user.click(screen.getByRole('button', { name: 'Yes, leave' }))
+
+    expect(await screen.findByText('the game is already over')).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(screen.getByTestId('board')).toBeInTheDocument()
+  })
+})
+
+describe('the deploy button once the army is in', () => {
+  /** The 21 pieces a deployment fills, as the server would report them back. */
+  function deployedArmy(): GameState {
+    // rows 0-2 across the nine columns, which is exactly the shape a 21-piece deployment takes
+    const placed = FULL_ARMY.map<[number, number, 'RED', Rank]>(
+      (rank, index) => [Math.floor(index / 9), index % 9, 'RED', rank],
+    )
+    return makeGame([...placed], { status: 'PLACEMENT', youPlaced: true })
+  }
+
+  it('turns green with a tick when the deployment is accepted', async () => {
+    const user = userEvent.setup()
+    apiMock.placement.mockResolvedValue(deployedArmy())
+    await renderInGame(makeGame([], { status: 'PLACEMENT' }))
+
+    await user.click(screen.getByRole('button', { name: 'Randomise' }))
+    const ready = screen.getByRole('button', { name: 'Ready' })
+    expect(ready.className).not.toContain('btn--done')
+    await user.click(ready)
+
+    // the server's answer, not the click: a request that fails must not paint a tick
+    await waitFor(() => expect(screen.getByRole('button', { name: /army placed/i })).toBeInTheDocument())
+    const done = screen.getByRole('button', { name: /army placed/i })
+    expect(done.className).toContain('btn--done')
+    expect(done).toBeDisabled()
+    expect(done.querySelector('.btn__tick')).not.toBeNull()
+    expect(screen.queryByRole('button', { name: 'Ready' })).not.toBeInTheDocument()
+  })
+
+  it('stays on the deployment screen while it waits for the opponent', async () => {
+    const user = userEvent.setup()
+    apiMock.placement.mockResolvedValue(deployedArmy())
+    await renderInGame(makeGame([], { status: 'PLACEMENT' }))
+
+    await user.click(screen.getByRole('button', { name: 'Randomise' }))
+    await user.click(screen.getByRole('button', { name: 'Ready' }))
+
+    expect(await screen.findByRole('button', { name: /army placed/i })).toBeInTheDocument()
+    expect(screen.getByText(/nothing to do now but wait/i)).toBeInTheDocument()
+    // the camp still shows all 21 pieces, because the tick claims something was sent
+    expect(screen.getByText(/^21 \/ 21$/)).toBeInTheDocument()
+    expect(
+      screen.getByRole('region', { name: /your camp/i }).querySelectorAll('.square--filled'),
+    ).toHaveLength(21)
+  })
+
+  it('is settled already on a refresh, from the server rather than from a click', async () => {
+    await renderInGame(deployedArmy())
+
+    expect(screen.getByRole('button', { name: /army placed/i })).toBeInTheDocument()
+    // and the camp is rebuilt from the board the server holds, or it would claim to be
+    // waiting on an empty camp
+    expect(screen.getByRole('region', { name: /your camp/i }).querySelectorAll('.square--filled')).toHaveLength(21)
+  })
+
+  it('will not offer a second deployment the server would refuse', async () => {
+    const user = userEvent.setup()
+    await renderInGame(deployedArmy())
+
+    expect(screen.getByRole('button', { name: 'Randomise' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Clear' })).toBeDisabled()
+    // clicking a camp square must not rearrange an army already in
+    await user.click(screen.getByRole('button', { name: /^Row 0 column 0/ }))
+    expect(apiMock.placement).not.toHaveBeenCalled()
+  })
+
+  it('says nothing about being sent before the army is sent', async () => {
+    await renderInGame(makeGame([], { status: 'PLACEMENT' }))
+
+    expect(screen.getByRole('button', { name: 'Ready' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Randomise' })).toBeEnabled()
+    expect(screen.queryByRole('button', { name: /army placed/i })).not.toBeInTheDocument()
   })
 })
 
@@ -543,6 +715,99 @@ describe('the name gate', () => {
   })
 })
 
+describe('playing the computer', () => {
+  it('offers the three levels, opening on the one the server defaults to', () => {
+    render(<App />)
+    const picker = screen.getByLabelText(/difficulty/i)
+    expect(picker).toHaveValue('LEARNING')
+    expect(
+      Array.from((picker as HTMLSelectElement).options).map((option) => option.value),
+    ).toEqual(['RANDOM', 'HEURISTIC', 'LEARNING'])
+    expect((picker as HTMLSelectElement).selectedOptions[0]).toHaveTextContent('Hard')
+  })
+
+  it('says what each level does, and the sentence follows the picker', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    expect(screen.getByText(/remembers the openings that have lost/i)).toBeInTheDocument()
+
+    await user.selectOptions(screen.getByLabelText(/difficulty/i), 'RANDOM')
+    expect(screen.getByText(/walk into anything/i)).toBeInTheDocument()
+    expect(screen.queryByText(/remembers the openings that have lost/i)).not.toBeInTheDocument()
+  })
+
+  it('starts a game against the computer at the level chosen', async () => {
+    const user = userEvent.setup()
+    apiMock.vsBot.mockResolvedValue({ gameId: 'g1', token: 'red-token', youAre: 'RED' })
+    render(<App />)
+
+    await user.selectOptions(screen.getByLabelText(/difficulty/i), 'RANDOM')
+    await user.click(screen.getByRole('button', { name: /start game/i }))
+
+    expect(apiMock.vsBot).toHaveBeenCalledWith('Tester', 'RANDOM')
+    // the seat it handed back is what the rest of the app runs on, so a refresh lands
+    // back in the game rather than in the lobby
+    expect(JSON.parse(localStorage.getItem('generals.session') ?? '{}')).toEqual({
+      gameId: 'g1',
+      token: 'red-token',
+      youAre: 'RED',
+    })
+  })
+
+  it('asks for no level it was not given, so the server is never left guessing', async () => {
+    const user = userEvent.setup()
+    apiMock.vsBot.mockResolvedValue({ gameId: 'g1', token: 'red-token', youAre: 'RED' })
+    render(<App />)
+
+    await user.click(screen.getByRole('button', { name: /start game/i }))
+    expect(apiMock.vsBot).toHaveBeenCalledWith('Tester', 'LEARNING')
+  })
+
+  it('will not start a game before a name, because the win would have nowhere to go', () => {
+    renderFirstVisitUser()
+    expect(screen.queryByRole('button', { name: /start game/i })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(/difficulty/i)).not.toBeInTheDocument()
+  })
+
+  it('shows what the server refused, and stays in the lobby', async () => {
+    const user = userEvent.setup()
+    apiMock.vsBot.mockRejectedValue(new ApiRequestError(400, 'unknown difficulty'))
+    render(<App />)
+
+    await user.click(screen.getByRole('button', { name: /start game/i }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/unknown difficulty/i)
+    expect(localStorage.getItem('generals.session')).toBeNull()
+  })
+
+  it('puts the computer on the board as the level it is playing', async () => {
+    apiMock.vsBot.mockResolvedValue({ gameId: 'g1', token: 'red-token', youAre: 'RED' })
+    apiMock.state.mockResolvedValue(
+      makeGame([], {
+        status: 'PLACEMENT',
+        seats: [
+          { color: 'RED', name: 'Tester', bot: false, you: true, difficulty: null },
+          { color: 'BLUE', name: null, bot: true, you: false, difficulty: 'RANDOM' },
+        ],
+      }),
+    )
+    render(<App />)
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: /start game/i }))
+
+    expect(await screen.findByText(/against computer \(easy\)/i)).toBeInTheDocument()
+  })
+
+  it('sends the name with a game against the computer', async () => {
+    const user = userEvent.setup()
+    apiMock.vsBot.mockResolvedValue({ gameId: 'g1', token: 'red-token', youAre: 'RED' })
+    render(<App />)
+    await user.selectOptions(screen.getByLabelText(/difficulty/i), 'HEURISTIC')
+    await user.click(screen.getByRole('button', { name: /start game/i }))
+
+    expect(apiMock.vsBot).toHaveBeenCalledWith('Tester', 'HEURISTIC')
+  })
+})
+
 describe('the scores page', () => {
   const SCORES = {
     totalPlayers: 3,
@@ -682,6 +947,78 @@ describe('the scores page', () => {
     apiMock.leaderboard.mockRejectedValue(new Error('offline'))
     render(<App />)
     expect(await screen.findByRole('alert')).toHaveTextContent(/could not load the scores/i)
+  })
+})
+
+describe('light and dark themes', () => {
+  it('is offered on the first visit, the lobby and the scores page', async () => {
+    renderFirstVisitUser()
+    expect(screen.getByRole('button', { name: /switch to the light theme/i })).toBeInTheDocument()
+    cleanup()
+
+    render(<App />)
+    expect(screen.getByRole('button', { name: /switch to the light theme/i })).toBeInTheDocument()
+    cleanup()
+
+    window.history.pushState({}, '', '/leaderboard')
+    render(<App />)
+    expect(screen.getByRole('button', { name: /switch to the light theme/i })).toBeInTheDocument()
+  })
+
+  it('flips the page and remembers the choice', async () => {
+    const user = renderFirstVisitUser()
+    document.documentElement.dataset.theme = 'dark'
+
+    await user.click(screen.getByRole('button', { name: /switch to the light theme/i }))
+
+    expect(document.documentElement.dataset.theme).toBe('light')
+    expect(localStorage.getItem('generals.theme')).toBe('light')
+    // the button now names the theme in force; its accessible name is the other one
+    expect(screen.getByRole('button', { name: /switch to the dark theme/i })).toBeInTheDocument()
+    expect(screen.getByText('Light')).toBeInTheDocument()
+  })
+
+  it('names the theme already on the page, not the one it would give you', async () => {
+    renderFirstVisitUser()
+    document.documentElement.dataset.theme = 'light'
+    await act(async () => {
+      render(<App />)
+    })
+
+    // this is what a reader who picked light last time sees: the toggle says Light, and the
+    // way out of it is the accessible name on the button
+    expect(screen.getByText('Light')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /switch to the dark theme/i })).toBeInTheDocument()
+  })
+
+  it('sits inside the game header, where the controls already are', async () => {
+    await renderInGame(playingGame())
+    const toggle = screen.getByRole('button', { name: /switch to the light theme/i })
+    expect(toggle.closest('.game__controls')).not.toBeNull()
+  })
+})
+
+describe('the turn clock on the board', () => {
+  it('counts down on a live turn and is gone once the game is over', async () => {
+    const h = await renderInGame(playingGame({ turnSeconds: 60 }))
+    expect(screen.getByRole('timer')).toHaveTextContent('60s')
+
+    act(() =>
+      h.onState({
+        ...playingGame({ turnSeconds: 60 }),
+        status: 'FINISHED',
+        winner: 'RED',
+        winReason: 'RED captured the enemy flag',
+        currentPlayer: null,
+        turnDeadlineMillis: null,
+      }),
+    )
+    expect(screen.queryByRole('timer')).not.toBeInTheDocument()
+  })
+
+  it('is absent while armies are still being placed', async () => {
+    await renderInGame(makeGame([], { status: 'PLACEMENT', turnDeadlineMillis: null }))
+    expect(screen.queryByRole('timer')).not.toBeInTheDocument()
   })
 })
 

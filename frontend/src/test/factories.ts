@@ -58,8 +58,13 @@ export interface GameOverrides {
   winner?: PlayerColor | null
   winReason?: string | null
   turnNumber?: number
+  /** Whether this viewer has deployed; default false, as if still choosing. */
+  youPlaced?: boolean
   lastBattle?: Battle | null
   log?: string[]
+  /** A deadline in epoch millis, defaulting to 60 seconds from now (see makeGame). */
+  turnDeadlineMillis?: number | null
+  turnSeconds?: number
   yourPiecesRemaining?: number
   opponentPiecesRemaining?: number
   seats?: Seat[]
@@ -85,10 +90,14 @@ export function makeGame(
     gameId: 'test-game',
     status: 'IN_PROGRESS',
     youAre: 'RED',
+    youPlaced: overrides.youPlaced ?? false,
     currentPlayer: 'RED',
     winner: null,
     winReason: null,
     flagEscapePending: false,
+    // a clock running, as it is for any live turn; overrides.turnDeadlineMillis: null turns it off
+    turnDeadlineMillis: overrides.turnDeadlineMillis ?? Date.now() + 60_000,
+    turnSeconds: overrides.turnSeconds ?? 60,
     turnNumber: 0,
     rows: ROWS,
     cols: COLS,
@@ -98,8 +107,8 @@ export function makeGame(
     lastBattle: null,
     log: [],
     seats: overrides.seats ?? [
-      { color: 'RED', name: 'Tester', bot: false, you: true },
-      { color: 'BLUE', name: 'Rival', bot: false, you: false },
+      { color: 'RED', name: 'Tester', bot: false, you: true, difficulty: null },
+      { color: 'BLUE', name: 'Rival', bot: false, you: false, difficulty: null },
     ],
     chat: overrides.chat ?? [],
     ...overrides,

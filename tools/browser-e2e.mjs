@@ -39,6 +39,26 @@ function parseLabel(label) {
   const row = Number(label.slice(1)) - 1
   return { row, col }
 }
+/* -------------------------------------------------------- theme measurement --
+ * jsdom never loads a stylesheet, so the only place a theme can be proven is here: these
+ * read the colours the browser actually resolved, and compare them for contrast. */
+const channel = (v) => {
+  const c = v / 255
+  return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+}
+/** WCAG relative luminance of a computed `rgb(r, g, b)`. */
+function luminance(css) {
+  const [r, g, b] = css.match(/[\d.]+/g).slice(0, 3).map(Number)
+  return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+}
+/** Contrast ratio between two computed colours; null if either is not opaque enough to judge. */
+function contrast(a, b) {
+  const la = luminance(a)
+  const lb = luminance(b)
+  if (la < 0.02 && lb < 0.02) return null
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05)
+}
+
 const ortho = (r, c) =>
   [
     [r - 1, c],
@@ -199,6 +219,35 @@ const square = (page, coord) => page.locator(`.board__grid .square[aria-label^="
 const banner = (page) => page.locator('.banner')
 const myTurn = async (page) => (await banner(page).innerText()).includes('Your move')
 
+/**
+ * How wide a screen the page really wants, measured at 360px and then put back.
+ *
+ * jsdom has no layout engine, so this is the only place a row of buttons can be proved not
+ * to push a phone sideways — and `wide` names the elements that crossed the edge, because
+ * "520px in 360px" on its own says nothing about what to fix.*
+ */
+const phoneFits = async (page) => {
+  await page.setViewportSize({ width: 360, height: 720 })
+  await page.waitForTimeout(200)
+  const measured = await page.evaluate(() => {
+    const shown = window.innerWidth
+    return {
+      scroll: document.documentElement.scrollWidth,
+      shown,
+      wide: Array.from(document.querySelectorAll('body *'))
+        .filter((el) => el.getBoundingClientRect().right > shown + 1)
+        .slice(0, 6)
+        .map(
+          (el) =>
+            `${el.tagName.toLowerCase()}.${(el.className || '').toString().split(' ')[0]}=${Math.round(el.getBoundingClientRect().width)}`,
+        ),
+    }
+  })
+  await page.setViewportSize({ width: 1400, height: 1000 })
+  await page.waitForTimeout(150)
+  return measured
+}
+
 /** The socket indicator flips to "connected" only once STOMP CONNECT lands. */
 async function waitLive(page, timeout = 15000) {
   const deadline = Date.now() + timeout
@@ -226,8 +275,14 @@ async function deploy(page) {
 async function main() {
   const { chromium } = loadPlaywright()
   const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] })
-  const ctx1 = await browser.newContext({ viewport: { width: 1400, height: 1000 } })
-  const ctx2 = await browser.newContext({ viewport: { width: 1400, height: 1000 } })
+  // colorScheme is pinned on purpose. Chromium's default is to prefer light, and the app's
+  // contract is "follow the machine until the reader picks a side", so both windows are told
+  // to prefer dark: that makes the OS-following path the one under test here, and the
+  // toggle the one that overrides it. The light-preferring path is checked further down, in
+  // its own context, because a fresh context with no stored choice is the honest way to ask.
+  const darkMachine = { viewport: { width: 1400, height: 1000 }, colorScheme: 'dark' }
+  const ctx1 = await browser.newContext(darkMachine)
+  const ctx2 = await browser.newContext(darkMachine)
   await ctx1.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: FRONTEND })
   await ctx2.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: FRONTEND })
 
@@ -262,6 +317,109 @@ async function main() {
     () => getComputedStyle(document.body).backgroundColor,
   )
   check('stylesheet is applied (dark theme)', themed === 'rgb(15, 18, 22)', themed)
+
+  console.log('== themes ==')
+  // what the browser resolved, not what the stylesheet says it meant
+  const bodyColours = () =>
+    p1.evaluate(() => ({
+      attr: document.documentElement.dataset.theme,
+      scheme: getComputedStyle(document.documentElement).colorScheme,
+      bg: getComputedStyle(document.body).backgroundColor,
+      text: getComputedStyle(document.body).color,
+      card: getComputedStyle(document.querySelector('.card')).backgroundColor,
+      input: getComputedStyle(document.querySelector('.field input')).backgroundColor,
+      btn: getComputedStyle(document.querySelector('.btn--primary')).backgroundColor,
+      btnText: getComputedStyle(document.querySelector('.btn--primary')).color,
+      stored: window.localStorage.getItem('generals.theme'),
+    }))
+
+  const dark = await bodyColours()
+  check('the page says it is dark', dark.attr === 'dark', `attr=${dark.attr}`)
+  check(
+    'native controls follow the theme too',
+    dark.scheme === 'dark' || dark.scheme === 'normal',
+    dark.scheme,
+  )
+  const darkContrast = contrast(dark.bg, dark.text)
+  check(
+    'dark theme: body text is readable on the page',
+    darkContrast !== null && darkContrast >= 4.5,
+    `${darkContrast?.toFixed(2)}:1 between ${dark.bg} and ${dark.text}`,
+  )
+  // the primary button inherited var(--text) once, which is ink on a red plate in light mode
+  check(
+    'dark theme: the primary button is not ink on red',
+    contrast(dark.btn, dark.btnText) >= 4.5,
+    `${contrast(dark.btn, dark.btnText).toFixed(2)}:1`,
+  )
+
+  await p1.getByRole('button', { name: /switch to the light theme/i }).click()
+  await sleep(250)
+  const light = await bodyColours()
+  check('the switch puts the page in light mode', light.attr === 'light', `attr=${light.attr}`)
+  check(
+    'native controls follow the switch',
+    light.scheme === 'light',
+    light.scheme,
+  )
+  check(
+    'the page is actually painted light',
+    luminance(light.bg) > 0.5 && light.card !== dark.card && light.input !== dark.input,
+    `body ${light.bg}, card ${light.card}, input ${light.input}`,
+  )
+  const lightContrast = contrast(light.bg, light.text)
+  check(
+    'light theme: body text is readable on the page',
+    lightContrast !== null && lightContrast >= 4.5,
+    `${lightContrast?.toFixed(2)}:1 between ${light.bg} and ${light.text}`,
+  )
+  check(
+    'light theme: the primary button is not ink on red',
+    contrast(light.btn, light.btnText) >= 4.5,
+    `${contrast(light.btn, light.btnText).toFixed(2)}:1`,
+  )
+  check('the choice is remembered in the browser', light.stored === 'light', `stored=${light.stored}`)
+  await p1.screenshot({ path: '/tmp/opencode/browser-lobby-light.png', fullPage: true })
+
+  // A reload is the only proof the choice survives a fresh document: main.tsx applies it
+  // before the first render, so there is no window in which the page is dark.
+  await p1.reload()
+  await p1.locator('.lobby__cards').waitFor({ timeout: 10000 })
+  const reloaded = await bodyColours()
+  check(
+    'a refresh comes back light, not dark for a moment',
+    reloaded.attr === 'light' && luminance(reloaded.bg) > 0.5,
+    `attr=${reloaded.attr}, body ${reloaded.bg}`,
+  )
+  await p1.getByRole('button', { name: /switch to the dark theme/i }).click()
+  await sleep(100)
+  const back = await bodyColours()
+  check(
+    'and it switches back to dark',
+    back.attr === 'dark' && luminance(back.bg) < 0.05,
+    `attr=${back.attr}, body ${back.bg}`,
+  )
+
+  // A machine that prefers light, on a browser with nothing stored: the page must come up
+  // light without having written a preference of its own. This is the one check jsdom
+  // cannot make, because it has no matchMedia and loads no stylesheet.
+  const ctx3 = await browser.newContext({ colorScheme: 'light' })
+  const p3 = await ctx3.newPage()
+  await p3.goto(FRONTEND)
+  await p3.locator('.namegate h2').waitFor({ timeout: 10000 })
+  const followed = await p3.evaluate(() => ({
+    attr: document.documentElement.dataset.theme,
+    bg: getComputedStyle(document.body).backgroundColor,
+    stored: window.localStorage.getItem('generals.theme'),
+  }))
+  check(
+    'a machine that prefers light comes up light, with nothing stored',
+    followed.attr === 'light' &&
+      luminance(followed.bg) > 0.5 &&
+      followed.stored === null,
+    `attr=${followed.attr}, body ${followed.bg}, stored=${followed.stored}`,
+  )
+  await ctx3.close()
 
   await p1.getByRole('button', { name: 'Create game' }).click()
   await p1.locator('.waiting__code code').waitFor({ timeout: 10000 })
@@ -392,12 +550,198 @@ async function main() {
     if (alert) note(`blue alert: ${await p2.locator('.alert--error').innerText()}`)
     note(`blue tray leftovers: ${(await p2.locator('.tray__count').allInnerTexts()).join(',')}`)
   }
+  // Red first and on its own, so the deployment screen is still up when the button settles:
+  // a deployment cannot be taken back, and a screen whose only button still read "Ready"
+  // while it waited would read as a broken one. Blue has not deployed, which is the only
+  // thing that makes that gap observable — a game against the computer goes live at once.
   await p1.getByRole('button', { name: 'Ready' }).click()
+  await p1.getByRole('button', { name: 'Army placed' }).waitFor({ timeout: 10000 })
+  // The button crossfades its background over 150ms, so a colour read the instant it appears
+  // is a colour on the way from the red primary to the green — a midpoint of the two, which
+  // is neither. Read it twice and only believe two readings that agree.
+  const settledPlate = async () => {
+    const read = () =>
+      p1.evaluate(() => {
+        const button = document.querySelector('.btn--done')
+        if (!button) return null
+        const style = getComputedStyle(button)
+        return {
+          bg: style.backgroundColor,
+          text: style.color,
+          tick: !!button.querySelector('.btn__tick'),
+        }
+      })
+    let previous = await read()
+    for (let attempt = 0; attempt < 10; attempt++) {
+      await sleep(120)
+      const next = await read()
+      if (next && previous && next.bg === previous.bg) return next
+      previous = next
+    }
+    return previous
+  }
+  const darkPlate = await settledPlate()
+  const [r, g, b] = (darkPlate?.bg ?? '').match(/\d+/g)?.map(Number) ?? [0, 0, 0]
+  check(
+    'red\'s deploy button turns green with a tick once the army is in',
+    // green means green, not merely "not the red primary"
+    !!darkPlate &&
+      r < 80 &&
+      g > r + 50 &&
+      b < g &&
+      darkPlate.text === 'rgb(255, 255, 255)' &&
+      darkPlate.tick,
+    `${darkPlate?.bg} with ${darkPlate?.text}, tick ${darkPlate?.tick}`,
+  )
+  check(
+    'and the button cannot be pressed again, nor the camp rearranged behind it',
+    (await p1.getByRole('button', { name: 'Army placed' }).isDisabled()) &&
+      (await p1.getByRole('button', { name: 'Randomise' }).isDisabled()),
+  )
+  check(
+    'and the screen says what it is waiting for',
+    /cannot be changed/i.test(await p1.locator('.placement__hint').innerText()),
+    await p1.locator('.placement__hint').innerText(),
+  )
+  check('red still has all 21 pieces on show', (await p1.locator('.board--camp .square--filled').count()) === 21)
+  check(
+    'blue\'s button is untouched, because blue has not deployed',
+    (await p2.locator('.btn--done').count()) === 0,
+  )
+
+  // Leaving costs the game, so it asks first — and it is offered during deployment as well
+  // as over the board, because an opponent who never deploys would otherwise hold this
+  // screen hostage with no clock to rescue it.
+  await p2.getByRole('button', { name: 'Leave', exact: true }).click()
+  const leaveAsk = await p2.locator('.leave__ask').innerText().catch(() => '')
+  check(
+    'leaving asks before it concedes',
+    leaveAsk.length > 0 && (await p2.getByRole('button', { name: 'Yes, leave' }).count()) === 1,
+    leaveAsk,
+  )
+  check(
+    'and the first press has not ended anything',
+    (await p2.locator('.placement').count()) === 1,
+  )
+  const confirmPlate = await p2.evaluate(() => {
+    const yes = [...document.querySelectorAll('button')].find((b) => b.textContent?.includes('Yes, leave'))
+    const style = yes ? getComputedStyle(yes) : null
+    return style ? { bg: style.backgroundColor, text: style.color } : null
+  })
+  check(
+    'the confirm button is legible on its own plate',
+    !!confirmPlate && contrast(confirmPlate.bg, confirmPlate.text) >= 4.5,
+    confirmPlate ? `${contrast(confirmPlate.bg, confirmPlate.text)?.toFixed(2)}:1 on ${confirmPlate.bg}` : 'no button',
+  )
+  await p2.getByRole('button', { name: 'Stay' }).click()
+  check(
+    'and it can be backed out of, with the deployment screen still up',
+    (await p2.locator('.leave__ask').count()) === 0 &&
+      (await p2.locator('.placement').count()) === 1 &&
+      (await p2.getByRole('button', { name: 'Leave', exact: true }).count()) === 1,
+  )
+
+  // Five controls now sit in the deployment header, and a phone is the width that notices:
+  // measure it the same way the board and the scores table are measured.
+  const placementFits = await phoneFits(p2)
+  check(
+    'the deployment screen does not scroll sideways on a phone',
+    placementFits.scroll <= placementFits.shown + 1,
+    `${placementFits.scroll}px of content in ${placementFits.shown}px, over the edge: ${placementFits.wide.join(', ') || 'nothing'}`,
+  )
+
+  // White on a green plate is the whole risk in a button like this: the green that reads as
+  // "done" on a dark surface is too light for white text, so each theme needs its own, and
+  // a theme is not a theme until the browser has resolved both of them.
+  check(
+    'dark theme: the tick is legible on the green plate',
+    contrast(darkPlate.bg, darkPlate.text) >= 4.5,
+    `${contrast(darkPlate.bg, darkPlate.text).toFixed(2)}:1 on ${darkPlate.bg}`,
+  )
+  await p1.getByRole('button', { name: /switch to the light theme/i }).click()
+  await sleep(250)
+  const lightPlate = await settledPlate()
+  check(
+    'light theme: the tick is still legible on the green plate',
+    contrast(lightPlate.bg, lightPlate.text) >= 4.5,
+    `${contrast(lightPlate.bg, lightPlate.text).toFixed(2)}:1 on ${lightPlate.bg}`,
+  )
+  await p1.screenshot({ path: '/tmp/opencode/browser-placed-light.png', fullPage: true })
+  await p1.getByRole('button', { name: /switch to the dark theme/i }).click()
+  await sleep(200)
   await p2.getByRole('button', { name: 'Ready' }).click()
 
   console.log('\n== board ==')
   await p1.locator('[data-testid="board"]').waitFor({ timeout: 15000 })
   await p2.locator('[data-testid="board"]').waitFor({ timeout: 15000 })
+  // The board is the most themed part of the app, so it is the part worth looking at in the
+  // other theme — and the theme is per browser, so red switching must not move blue's page.
+  const boardColours = () =>
+    p1.evaluate(() => ({
+      square: getComputedStyle(document.querySelector('.square')).backgroundColor,
+      mine: getComputedStyle(document.querySelector('.square--mine') ?? document.querySelector('.square')).backgroundColor,
+      face: getComputedStyle(document.querySelector('.piece--face-down')).backgroundImage,
+      // face UP on purpose: a hidden enemy piece also carries piece--blue, and its hatch is
+      // meant to change with the theme — the team colours live on the pieces you can see
+      piece: getComputedStyle(
+        document.querySelector('.piece--red:not(.piece--face-down)'),
+      ).backgroundImage,
+    }))
+  // squares transition over 120ms, so a reading taken too soon catches a board halfway
+  // between the two themes and proves nothing
+  const settled = () =>
+    p1.evaluate(async () => {
+      const square = document.querySelector('.square')
+      const read = () => getComputedStyle(square).backgroundColor
+      let previous = read()
+      for (let tries = 0; tries < 40; tries++) {
+        await new Promise((r) => setTimeout(r, 25))
+        const now = read()
+        if (now === previous) return now
+        previous = now
+      }
+      return previous
+    })
+  const boardDark = await boardColours()
+  await settled()
+  await p1.getByRole('button', { name: /switch to the light theme/i }).click()
+  await sleep(150)
+  const boardLight = await boardColours()
+  const blueStillDark = await p2.evaluate(() => document.documentElement.dataset.theme)
+  check(
+    'the board repaints in the light theme',
+    luminance(boardLight.square) > 0.5 && luminance(boardDark.square) < 0.05,
+    `empty square ${boardDark.square} -> ${boardLight.square}`,
+  )
+  check(
+    'your own half stays a different colour from an empty square',
+    boardLight.mine !== boardLight.square,
+    `mine ${boardLight.mine}, empty ${boardLight.square}`,
+  )
+  check(
+    'a face-down piece stays a hatch, and stops being a dark slab',
+    boardLight.face !== boardDark.face && !boardLight.face.includes('70, 75, 84'),
+    boardLight.face.slice(0, 60),
+  )
+  check(
+    'the team colours do not change with the theme',
+    boardLight.piece === boardDark.piece,
+    `dark ${boardDark.piece} / light ${boardLight.piece}`,
+  )
+  check(
+    "one player switching does not move the other's page",
+    blueStillDark === 'dark',
+    `blue is ${blueStillDark}`,
+  )
+  await p1.screenshot({ path: '/tmp/opencode/browser-board-light.png', fullPage: false })
+  await p1.getByRole('button', { name: /switch to the dark theme/i }).click()
+  await settled()
+  const boardBack = await boardColours()
+  check(
+    'and the switch puts the board back',
+    boardBack.square === boardDark.square,
+    `${boardDark.square} -> ${boardBack.square}`,
+  )
   const identity1 = await p1.locator('.game__identity').innerText()
   const identity2 = await p2.locator('.game__identity').innerText()
   check(
@@ -454,6 +798,56 @@ async function main() {
   check('red is told it is its move', await myTurn(p1))
   check('blue is told to wait', !(await myTurn(p2)))
   check('both sockets are live', (await p1.locator('.conn').innerText()).trim() === 'live')
+
+  console.log('\n== clock ==')
+  // The countdown is drawn from an instant the server chose, so the honest check is against
+  // that instant and not against a number the test made up: fetch the state both windows are
+  // being pushed and compare the seconds on screen with what is left of the same deadline.
+  const readClock = async (page) => ({
+    text: (await page.locator('[role="timer"] .clock__time').innerText()).trim(),
+    tone: (await page.locator('[role="timer"]').getAttribute('class')) || '',
+    width: await page
+      .locator('[role="timer"] .clock__fill')
+      .evaluate((el) => el.style.width),
+    label: await page.locator('[role="timer"] .sr-only').innerText(),
+  })
+  const deadlineState = () =>
+    p1.evaluate(async () => {
+      const session = JSON.parse(localStorage.getItem('generals.session'))
+      const response = await fetch('/api/games/' + session.gameId, {
+        headers: { 'X-Player-Token': session.token },
+      })
+      return response.json()
+    })
+
+  check('red is shown a clock', (await p1.locator('[role="timer"]').count()) === 1)
+  check('blue is shown the same clock', (await p2.locator('[role="timer"]').count()) === 1)
+
+  const before = await readClock(p1)
+  const beforeBlue = await readClock(p2)
+  check('the clock counts a whole turn, not a guess', before.text === '60s', before.text)
+  check('both players are shown the same time left', before.text === beforeBlue.text,
+    `red ${before.text}, blue ${beforeBlue.text}`)
+  check('it says the time is on the player to move', /your move/i.test(before.label), before.label)
+  check('the bar starts full', before.width === '100%', before.width)
+  check('nothing is announced once a second',
+    (await p1.locator('[role="timer"]').getAttribute('aria-live')) === 'off')
+
+  await sleep(1600)
+  const after = await readClock(p1)
+  const ticked = Number.parseInt(before.text, 10) - Number.parseInt(after.text, 10)
+  check('the number counts down', ticked >= 1 && Number.parseInt(after.text, 10) >= 0,
+    `${before.text} then ${after.text}`)
+  check('the bar empties with it', Number.parseInt(after.width, 10) < 100, after.width)
+
+  const state = await deadlineState()
+  const leftFromServer = Math.ceil((state.turnDeadlineMillis - Date.now()) / 1000)
+  const shown = Number.parseInt(after.text, 10)
+  check('the number is the server\'s deadline, not one the client counted',
+    Math.abs(leftFromServer - shown) <= 1 && state.turnSeconds === 60,
+    `server ${leftFromServer}s, screen ${shown}s, turnSeconds ${state.turnSeconds}`)
+  check('the client sends nothing the server did not', state.turnDeadlineMillis > 0,
+    `deadline ${state.turnDeadlineMillis}`)
 
   console.log('\n== board feedback ==')
   // Out of turn: click one of blue's own pieces and expect the explanation.
@@ -699,6 +1093,11 @@ async function main() {
     hiddenLeft > 0,
     `${hiddenLeft} still hidden, ${namedByBlue.length} revealed`,
   )
+  check(
+    'the clock is gone once the game is over',
+    (await p1.locator('[role="timer"]').count()) === 0 &&
+      (await p2.locator('[role="timer"]').count()) === 0,
+  )
 
   console.log('\n== scores ==')
   const recorded1 = await p1.locator('.gameover__recorded').innerText()
@@ -822,6 +1221,69 @@ async function main() {
   await p1.screenshot({ path: `${shots}/browser-red.png`, fullPage: true })
   await p2.screenshot({ path: `${shots}/browser-blue.png`, fullPage: true })
   check('screenshots captured', true, `${shots}/browser-{red,blue}.png`)
+
+  // The first game is finished, and a finished game cannot be left twice: the only honest
+  // place to see a resignation is a second one. p1 is on the scores page, where the way
+  // back is the lobby link, and the session is still live — so the end screen comes back
+  // and is dismissed from there, which is the path a player actually walks.
+  console.log('\n== leaving a live game ==')
+  await p1.getByRole('link', { name: 'Back to the lobby' }).click()
+  await p1.waitForSelector('.gameover-overlay', { timeout: 10000 })
+  await p1.getByRole('button', { name: 'Back to lobby' }).click()
+  await p1.locator('.lobby__cards').waitFor({ timeout: 10000 })
+  await p2.getByRole('button', { name: 'Back to lobby' }).click()
+  await p2.locator('.lobby__cards').waitFor({ timeout: 10000 })
+  check('both players are back in the lobby, out of the finished game', true)
+
+  await p1.getByRole('button', { name: 'Create game' }).click()
+  await p1.locator('.waiting__code code').waitFor({ timeout: 10000 })
+  const secondGame = (await p1.locator('.waiting__code code').innerText()).trim()
+  await p2.getByLabel('Game code').fill(secondGame)
+  await p2.getByRole('button', { name: 'Join' }).click()
+  await p2.locator('.placement').waitFor({ timeout: 15000 })
+  await p1.locator('.placement').waitFor({ timeout: 15000 })
+  check('a second game is under way', secondGame.length > 0, `code ${secondGame}`)
+
+  await p2.getByRole('button', { name: 'Leave', exact: true }).click()
+  check('the way out still asks first in a fresh game', (await p2.locator('.leave__ask').count()) === 1)
+  check(
+    'and nothing has ended while the question is on screen',
+    (await p1.locator('.placement').count()) === 1 && (await p2.locator('.placement').count()) === 1,
+  )
+  await p2.getByRole('button', { name: 'Yes, leave' }).click()
+  await p1.waitForSelector('.gameover-overlay', { timeout: 15000 })
+  await p2.waitForSelector('.gameover-overlay', { timeout: 15000 })
+  const leaverRed = await p1.locator('.gameover__title').innerText()
+  const leaverBlue = await p2.locator('.gameover__title').innerText()
+  check(
+    'leaving hands the win to the opponent',
+    leaverRed === 'Victory' && leaverBlue === 'Defeat',
+    `red=${leaverRed} blue=${leaverBlue}`,
+  )
+  const leaverReason = await p1.locator('.gameover__reason').innerText()
+  check(
+    'the end screen says who left',
+    leaverReason.includes('BLUE left the game'),
+    leaverReason,
+  )
+  check(
+    'the opponent was told without asking for anything',
+    (await p2.locator('.gameover__recorded').innerText()).includes('loss is on the record as Blue'),
+    await p2.locator('.gameover__recorded').innerText(),
+  )
+  check(
+    'and the one who stayed is credited with the win',
+    (await p1.locator('.gameover__recorded').innerText()).includes('win for Red'),
+    await p1.locator('.gameover__recorded').innerText(),
+  )
+  const leaverRows = await p1.evaluate(async () => (await (await fetch('/api/leaderboard')).json()).entries)
+  const leaverRed2 = leaverRows.find((e) => e.name === 'Red')
+  const leaverBlue2 = leaverRows.find((e) => e.name === 'Blue')
+  check(
+    'the resignation is on the ledger as a second game each',
+    !!leaverRed2 && !!leaverBlue2 && leaverRed2.gamesPlayed === 2 && leaverBlue2.gamesPlayed === 2,
+    JSON.stringify({ red: leaverRed2, blue: leaverBlue2 }),
+  )
 
   check(
     'no console errors or uncaught exceptions in either page',

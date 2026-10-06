@@ -130,6 +130,23 @@ public class GameController {
         return view;
     }
 
+    /**
+     * Concedes the game: the opponent wins, in whatever phase the two of them were.
+     *
+     * <p>Answers with the quitter's own view — a finished one, with the reason on it — and
+     * broadcasts, because the player who has just been handed the win is sitting on the
+     * other side of a socket and has not asked for anything. Leaving the waiting room is
+     * not this: there is no opponent to concede to yet, and the server says so rather than
+     * letting a game end with nobody to award it to.
+     */
+    @PostMapping("/{gameId}/resign")
+    public GameStateDto resign(@PathVariable String gameId,
+                               @RequestHeader(TOKEN_HEADER) String token) {
+        GameStateDto view = gameManager.resign(gameId, token);
+        broadcaster.broadcast(gameManager.require(gameId, token));
+        return view;
+    }
+
     private Map<Position, Rank> toDeployment(Requests.PlacementRequest request) {
         Map<Position, Rank> deployment = new LinkedHashMap<>();
         for (Requests.DeploymentEntry entry : request.pieces()) {

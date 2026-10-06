@@ -43,10 +43,13 @@ public class GameViewMapper {
                 game.status().name(),
                 viewer.name(),
                 session.isAgainstBot(viewer),
+                game.hasPlaced(viewer),
                 game.status() == Game.Status.FINISHED ? null : game.currentPlayer().name(),
                 game.winner() == null ? null : game.winner().name(),
                 game.winReason(),
                 game.isFlagEscapePending(),
+                clockFor(game, session),
+                session.turnSeconds(),
                 game.history().size(),
                 Board.ROWS,
                 Board.COLS,
@@ -57,6 +60,20 @@ public class GameViewMapper {
                 log,
                 session.seatsFor(viewer),
                 session.chat());
+    }
+
+    /**
+     * The moment the turn on the clock falls due, or null when nothing is being timed.
+     *
+     * <p>Null in every phase that is not a live turn, including a finished game and one
+     * where the computer has the move: {@link com.generals.service.TurnClock} does not run
+     * on the bot, so a deadline there would be a countdown to nothing.
+     */
+    private Long clockFor(Game game, GameSession session) {
+        if (game.status() != Game.Status.IN_PROGRESS || game.isOver() || !session.isClockRunning()) {
+            return null;
+        }
+        return session.turnDeadline();
     }
 
     private List<SquareDto> boardFor(Game game, PlayerColor viewer) {
@@ -164,6 +181,12 @@ public class GameViewMapper {
         String action = record.wasContested()
                 ? battleDescription(record.battle(), viewer)
                 : "moved to " + record.to().label();
+        // Both players are told when a move was made by the clock rather than by the mover.
+        // Nothing is revealed by saying so — they both watched the countdown reach zero —
+        // and a piece that moves by itself with no explanation reads as a bug.
+        if (record.byClock()) {
+            action = action + " (" + side + " ran out of time)";
+        }
         return "#" + record.moveNumber() + " " + side + " " + who + " " + action;
     }
 }

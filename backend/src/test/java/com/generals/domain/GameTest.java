@@ -13,6 +13,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -420,6 +421,61 @@ class GameTest {
 
             assertThrows(IllegalStateException.class,
                     () -> game.move(PlayerColor.BLUE, at(6, 6), at(5, 6)));
+        }
+    }
+
+    @Nested
+    @DisplayName("leaving the game")
+    class Resigning {
+
+        @Test
+        @DisplayName("a resignation hands the win to the opponent, deployment included")
+        void resignAwardsTheOpponent() {
+            game.beginPlacement();
+
+            game.resign(PlayerColor.RED);
+
+            assertTrue(game.isOver());
+            assertEquals(PlayerColor.BLUE, game.winner());
+            assertEquals("RED left the game", game.winReason());
+        }
+
+        @Test
+        @DisplayName("there is nothing to resign from before an opponent has joined")
+        void resignNeedsAnOpponent() {
+            assertThrows(IllegalStateException.class, () -> game.resign(PlayerColor.RED));
+
+            assertFalse(game.isOver());
+            assertNull(game.winner());
+        }
+
+        @Test
+        @DisplayName("a finished game cannot be resigned a second time")
+        void resignAfterTheEndIsRefused() {
+            startWithFlags();
+            game.resign(PlayerColor.BLUE);
+
+            assertThrows(IllegalStateException.class, () -> game.resign(PlayerColor.RED));
+
+            assertEquals(PlayerColor.RED, game.winner(), "the first resignation stands");
+            assertEquals("BLUE left the game", game.winReason());
+        }
+
+        @Test
+        @DisplayName("the flag escape pending when someone leaves is called off")
+        void resignCancelsAPendingEscape() {
+            startBare();
+            game.seed(red(Rank.FLAG, 5, 0));
+            game.seed(blue(Rank.FLAG, 7, 8));
+            game.seed(blue(Rank.PRIVATE, 7, 7));
+
+            game.move(PlayerColor.RED, at(5, 0), at(5, 1)); // flag escapes
+            assertTrue(game.isFlagEscapePending());
+
+            game.resign(PlayerColor.BLUE);
+
+            assertFalse(game.isFlagEscapePending());
+            assertEquals(PlayerColor.RED, game.winner());
         }
     }
 

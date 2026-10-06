@@ -375,6 +375,32 @@ class GameSocketIntegrationTest {
     }
 
     @Test
+    @DisplayName("the pushed view carries the clock, and a fresh one after each move")
+    void pushedViewCarriesTheClock() throws Exception {
+        Seat seat = emptyGame();
+        RawStompClient blue = connect(seat, seat.blueToken());
+        playBoth(seat);
+
+        JsonNode started = blue.await(n -> "IN_PROGRESS".equals(n.get("status").asText()));
+        assertThat(started.get("turnSeconds").asInt()).isEqualTo(60);
+        assertThat(started.get("turnDeadlineMillis").isNumber()).isTrue();
+        long first = started.get("turnDeadlineMillis").asLong();
+        assertThat(first).isGreaterThan(System.currentTimeMillis());
+
+        rest.exchange("/api/games/" + seat.gameId() + "/move", HttpMethod.POST,
+                new HttpEntity<>(
+                        "{\"from\":{\"row\":2,\"col\":0},\"to\":{\"row\":3,\"col\":0}}",
+                        jsonHeaders(seat.redToken())),
+                String.class);
+
+        JsonNode afterMove = blue.await(n -> n.get("turnNumber").asInt() > 0);
+        assertThat(afterMove.get("youAre").asText()).isEqualTo("BLUE");
+        assertThat(afterMove.get("turnDeadlineMillis").asLong())
+                .as("BLUE's turn is timed from when it began, not from RED's")
+                .isGreaterThan(first);
+    }
+
+    @Test
     @DisplayName("an opponent's move pushes a fresh view to the waiting player")
     void movesArePushedToTheOpponent() throws Exception {
         Seat seat = emptyGame();

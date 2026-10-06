@@ -30,11 +30,16 @@ public class GameManager {
     private final Map<String, GameSession> games = new ConcurrentHashMap<>();
     private final GameViewMapper viewMapper;
     private final BotOpponent botOpponent;
+    private final TurnClock clock;
     private final ResultRecorder results;
 
-    public GameManager(GameViewMapper viewMapper, BotOpponent botOpponent, ResultRecorder results) {
+    public GameManager(GameViewMapper viewMapper,
+                       BotOpponent botOpponent,
+                       TurnClock clock,
+                       ResultRecorder results) {
         this.viewMapper = viewMapper;
         this.botOpponent = botOpponent;
+        this.clock = clock;
         this.results = results;
     }
 
@@ -121,6 +126,9 @@ public class GameManager {
             // A game cannot end during deployment, so there is no result to file here.
             session.game().submitPlacement(color, deployment);
         }
+        // The clock is armed before the view is built, so the view this player gets back
+        // already carries the deadline for the turn that has just begun.
+        clock.onChange(session);
         GameStateDto view = session.viewFor(color);
         botOpponent.onChange(session);
         return view;
@@ -136,6 +144,31 @@ public class GameManager {
             session.game().move(color, from, to);
             results.fileIfFinished(session, wasOver);
         }
+        clock.onChange(session);
+        GameStateDto view = session.viewFor(color);
+        botOpponent.onChange(session);
+        return view;
+    }
+
+    /**
+     * Concedes the game for {@code token}'s side and returns their refreshed view.
+     *
+     * <p>Read as the fourth watcher of a game's end rather than a fifth implementation of
+     * one: the winner is declared, the result is filed through {@link ResultRecorder} while
+     * the game's monitor is held, and only then is the clock — which would otherwise keep
+     * counting down a turn nobody is going to play — taken away. The caller broadcasts, so
+     * the opponent hears they have won without asking.
+     */
+    public GameStateDto resign(String gameId, String token) {
+        GameSession session = require(gameId, token);
+        PlayerColor color = session.colorOf(token)
+                .orElseThrow(() -> new GameAccessException("unknown player token"));
+        synchronized (session.game()) {
+            boolean wasOver = session.game().isOver();
+            session.game().resign(color);
+            results.fileIfFinished(session, wasOver);
+        }
+        clock.onChange(session);
         GameStateDto view = session.viewFor(color);
         botOpponent.onChange(session);
         return view;

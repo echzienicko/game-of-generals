@@ -40,6 +40,7 @@ public class BotOpponent {
     private final GameBroadcaster broadcaster;
     private final BotBrain brain;
     private final OpeningMemory memory;
+    private final TurnClock clock;
     private final ResultRecorder results;
     private final long thinkMillis;
     private final ScheduledExecutorService scheduler;
@@ -50,11 +51,13 @@ public class BotOpponent {
     public BotOpponent(GameBroadcaster broadcaster,
                        BotBrain brain,
                        OpeningMemory memory,
+                       TurnClock clock,
                        ResultRecorder results,
                        @Value("${generals.bot.think-millis:550}") long thinkMillis) {
         this.broadcaster = broadcaster;
         this.brain = brain;
         this.memory = memory;
+        this.clock = clock;
         this.results = results;
         this.thinkMillis = thinkMillis;
         this.scheduler = Executors.newSingleThreadScheduledExecutor(daemon("generals-bot"));
@@ -129,6 +132,9 @@ public class BotOpponent {
             results.fileFinished(session);
             lines.remove(game.id());
         }
+        // The turn has passed back to a person, so their clock starts now — the clock is
+        // deliberately not run on the bot's own turn.
+        clock.onChange(session);
         broadcaster.broadcast(session);
     }
 

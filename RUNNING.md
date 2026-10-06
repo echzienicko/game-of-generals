@@ -69,19 +69,19 @@ endpoint, and the deep links `/lobby`, `/game/{id}`, `/vs-bot` (forwarded to `in
 ## 3. Gates — run these before calling any change done
 
 ```sh
-# backend: 166 tests, builds the jar
+# backend: 203 tests, builds the jar
 cd backend  && mvn -o clean verify
 
-# frontend: 73 tests, type-checks (tests included), lints
+# frontend: 134 tests, type-checks (tests included), lints
 cd frontend && npm run build && npm test && npm run lint
 ```
 
 - `npm run build` runs `tsc -b` **then** `vite build`, so test files are type-checked too.
-- `npm run lint` (`oxlint`) reports the expected `only-export-components` warning(s) in
+- `npm run lint` (`oxlint`) reports the expected `only-export-components` warning in
   `src/state/GameContext.tsx`. That is expected, not a regression.
 - Unit and integration tests are **not sufficient** for frontend work — jsdom never loads
   real deps and cannot race two connections. Two blank-page/stuck-screen bugs got through
-  125 green tests. Before trusting a frontend change, run the real browser harness (68
+  125 green tests. Before trusting a frontend change, run the real browser harness (138
   checks, two real browsers playing each other):
 
 ```sh
@@ -89,12 +89,31 @@ tools/install-browser.sh    # once: Chromium + libs into /tmp/opencode/browser, 
 tools/browser-run.sh        # boots jar + dev server, plays a full game in two windows, tears down
 ```
 
+There is a second harness for the turn clock, which cannot be part of a full game: waiting
+out a 5-second clock is most of what it does, and it deliberately leaves one window alone to
+watch the server move for it (27 checks, about a minute).
+
+```sh
+CLOCK_ONLY=1 tools/browser-run.sh   # boots the jar with --generals.turn-seconds=5
+```
+
+And a third for a game against the computer, which the other two never start: one window,
+the lobby card, and a bot that has to deploy itself and answer a move (26 checks, about a
+minute).
+
+```sh
+BOT_ONLY=1 tools/browser-run.sh
+```
+
 `browser-run.sh` deletes its own ledger first (a run must not inherit the last run's
-scores) and kills both servers on the way out, reporting what is left. If a run is killed
+scores), **takes the ports by pid before booting** — a server already on `:8080` answers
+`/api/meta` perfectly, so without that the whole run would quietly test an older build —
+and kills both servers on the way out, reporting what is left. If a run is killed
 mid-flight, clear the port yourself:
 
 ```sh
 pkill -9 -f '[g]enerals-0.0.1-SNAPSHOT'; pkill -9 -f '[n]ode_modules/.bin/vite'
+ss -ltnp 'sport = :8080'   # anything still there was started some other way
 ```
 
 ---
@@ -149,16 +168,37 @@ sees the code can take that seat. Fine at home; don't publish it beyond a truste
   socket dies, moves fall back to REST and the UI shows a disconnected state.
 - **Fog of war is server-side.** Enemy ranks serialise as `rank: null` until they fight. Don't
   "fix" the client to infer them — that's the whole game.
-- The bot opponent exists as `POST /api/games/vs-bot[?difficulty=…]`, but **the UI has no
-  button for it** — use the API directly.
+- **Playing the computer is a card in the lobby.** Pick a level — Easy moves at random, Normal
+  scores every move, Hard also remembers the openings that have lost it games — and press *Start
+  game*. The computer deploys itself and plays at its own pace; the board names it *Computer
+  (Hard)* so a refresh leaves you knowing what you are up against. The picker opens on Hard
+  because that is what the server serves when no level is asked for, so the button and a bare
+  `curl` start the same game.
 - **You are asked your name once**, on the first visit, and it is kept in the browser under
   `generals.player`. There is no account: the name *is* the identity in the win table, so
   anyone on this server playing as `Nick` shares that row. To play as somebody else, clear
   that key in devtools.
+- **The page follows your machine until you say otherwise.** Light or dark is decided by
+  `prefers-color-scheme` until the switch in a screen's header is used, after which the
+  choice is kept in the browser under `generals.theme` and wins over the OS. Clear that key
+  to go back to following the system. Each browser has its own — one player switching does
+  not move the other's page.
+- **Moves are timed, by the server.** Each turn gets 60 seconds (`generals.turn-seconds`),
+  shown as a countdown in the board's header. When it runs out the server plays a **random
+  legal move** for whoever let it expire and says so in the move log — the clock keeps
+  running while a tab is closed, which is the whole reason it is on the server. The computer
+  is never on a clock. Start an untimed game with `--generals.turn-seconds=0`: no countdown
+  is sent and nothing moves itself.
 - **The win table survives a restart; games do not.** It lives at `data/leaderboard.json`
   beside wherever you started the server (override with `--generals.leaderboard.path=`).
   Delete that file to clear the scores. A corrupt one is logged and replaced by an empty
   ledger rather than stopping the server.
+- **Leaving is a deliberate press, and it loses.** *Leave* in the board header (or beside
+  the Ready button while arranging) asks once — "Leave and lose the game?" — and confirming
+  ends the game for both sides: you see *Defeat*, the opponent sees *Victory* with the
+  reason *RED left the game*, and the result goes on the ledger under both names. Closing a
+  tab does **not** forfeit anything: the clock keeps playing for whoever is still there, so
+  an abandoned game carries on rather than handing somebody a win.
 
 ---
 
@@ -170,17 +210,31 @@ sees the code can take that seat. Fine at home; don't publish it beyond a truste
 | `POST /api/games` | create a game → **201** + `gameId` + player token; body `{"name":"Nick"}` |
 | `POST /api/games/{id}/join` | take the second seat (no token needed); body `{"name":"Nick"}` |
 | `POST /api/games/matchmake` | pair with a waiting player, else create; body `{"name":"Nick"}` |
-| `POST /api/games/vs-bot` | create against the computer; body `{"name":"Nick"}` |
+| `POST /api/games/vs-bot` | create against the computer; body `{"name":"Nick"}`, `?difficulty=RANDOM\|HEURISTIC\|LEARNING` (default `LEARNING`, unknown value 400). Both seats are seated before it answers, so the caller lands straight on deployment. |
 | `GET /api/leaderboard` | every player, best first: wins, losses, played, win rate, streak. `?limit=` (1–500) if you want a slice |
 | `GET /api/games/{id}` | state, redacted for the caller (header `X-Player-Token`) |
 | `POST /api/games/{id}/placement` | `{"pieces":[{"row","col","rank"}]}` — must be **wrapped** |
+
+Once an army is in, the view's `youPlaced` is `true` **for that player only** — it is what
+turns the deploy button into the green, ticked, inert "Army placed" state. Both the view and
+the WebSocket push carry it, so a refresh shows the settled screen rather than an empty camp.
 | `POST /api/games/{id}/move` | `{"from":{"row","col"},"to":{"row","col"}}` |
 | `POST /api/games/{id}/chat` | say something to the other player: `{"text":"..."}` (≤200 chars). The author is the seat, not the body. |
+| `POST /api/games/{id}/resign` | leave the game: header `X-Player-Token`, no body → the opponent wins (`200` + your final state, pushed to both). `409` in the waiting room or after the game has already ended. |
 | `ws /ws` | SockJS/STOMP; subscribe `/user/queue/game/{id}`, errors on `/user/queue/errors`; send to `/app/game/{id}/move`, `/app/game/{id}/placement`, `/app/game/{id}/chat` |
 
 Status codes worth memorising: `201` on create, `400` illegal move **or a missing name**,
-`403` bad token, `404` unknown game, `409` wrong phase. Note the leaderboard is
+`403` bad token, `404` unknown game, `409` wrong phase **or a resignation that has nothing
+to hand over** (waiting room, already finished). Note the leaderboard is
 `/api/leaderboard`, not `/api/games/leaderboard` — it is not under `/api/games`.
+
+Every state payload (REST and push alike) carries the clock as `turnDeadlineMillis` — an
+**absolute epoch instant**, not a duration — alongside `turnSeconds`. Both are `null` when
+no clock is running: before deployment, on the computer's turn, after the game, or with
+`--generals.turn-seconds=0`. Count down to the deadline; never start a timer of your own,
+or a push that took a second in transit becomes a second off your move. Anything reading
+these has to agree with the server's clock, and a client with its own time minutes out will
+show a number that is minutes out.
 
 ---
 
@@ -197,4 +251,6 @@ Status codes worth memorising: `201` on create, `400` illegal move **or a missin
 | Scores page looks short | The ledger is per-server: `/leaderboard` shows this server only. `data/leaderboard.json` holds everyone; delete it to start over. |
 | Changes to React code don't show in the packaged jar | You ran `npm run build` instead of `npm run build:jar`. |
 | Maven hangs on startup of a build | You forgot `-o`. |
+| Port 8080 answers but the change I just built is not there | Something else owns the port: a leftover `mvn spring-boot:run`, whose command line is a maven classpath and so is invisible to `pkill -f generals`. `tools/browser-run.sh` now takes the port by pid and refuses to run if the listener is not its own jar — if you boot the backend by hand, check `ss -ltnp 'sport = :8080'` first. |
+| A piece moved and it was not me | That was the clock. `--generals.turn-seconds` governs it, and the move log says `… ran out of time`. |
 | `game <id> not found` mid-game | The backend restarted; games are not persisted. Create a new one. |

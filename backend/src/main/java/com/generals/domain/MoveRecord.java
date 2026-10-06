@@ -16,7 +16,16 @@ public record MoveRecord(
         Position from,
         Position to,
         BattleResult battle,
-        String description) {
+        String description,
+        /**
+         * True when the server played this move because the mover's clock ran out.
+         *
+         * <p>The move is a perfectly ordinary move in every other respect. The flag is here
+         * so the log can say so, which {@code GameViewMapper} does for both players: a piece
+         * that moves by itself with no explanation reads as a bug, and the clock is a
+         * decision the reader made by setting a timer at all.
+         */
+        boolean byClock) {
 
     public boolean wasContested() {
         return battle != null;

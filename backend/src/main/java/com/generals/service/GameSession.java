@@ -67,6 +67,23 @@ public class GameSession {
      */
     private final AtomicBoolean resultFiled = new AtomicBoolean();
 
+    /**
+     * When the move currently on the clock falls due, in epoch milliseconds, or 0.
+     *
+     * <p>Deliberately not derived from a turn counter: the client has to be able to show a
+     * clock that agrees with the server without polling, and the only number that does that
+     * is the moment the turn will end. {@link TurnClock} owns it — this session only holds
+     * it, because a view has to be able to read it under the same monitor as everything else.
+     *
+     * <p>Volatile because the view is built inside the game's monitor but written from the
+     * clock's scheduler thread, which takes that monitor too. Being inside the monitor is
+     * what makes it consistent; volatile is what makes the read cheap and never stale.
+     */
+    private volatile long turnDeadline;
+
+    /** How long the clock on that deadline gives, so a view can show a bar as well as a number. */
+    private volatile long turnSeconds;
+
     public GameSession(Game game, GameViewMapper viewMapper) {
         this.game = game;
         this.viewMapper = viewMapper;
@@ -100,6 +117,46 @@ public class GameSession {
         String token = newToken(color);
         bots.put(color, difficulty);
         return token;
+    }
+
+    // --------------------------------------------------------------- move clock
+
+    /** When the turn on the clock falls due, in epoch millis; 0 when none is running. */
+    public long turnDeadline() {
+        return turnDeadline;
+    }
+
+    /**
+     * Starts a clock. Called by {@link TurnClock} after every change to the game.
+     *
+     * <p>The duration travels with the deadline so a view can draw a bar that empties over
+     * the same span as the number counting down, without knowing how the server is
+     * configured.
+     */
+    public void armTurnClock(long deadlineMillis, long seconds) {
+        this.turnDeadline = deadlineMillis;
+        this.turnSeconds = seconds;
+    }
+
+    /** Stops the clock: no move is on the clock, because there is no game to move in. */
+    public void clearTurnClock() {
+        this.turnDeadline = 0;
+        this.turnSeconds = 0;
+    }
+
+    /**
+     * How many seconds a move is given, or 0 when no clock is running.
+     *
+     * <p>This is what the client is told the duration is, so a game with the clock switched
+     * off sends 0 and the client shows no clock at all.
+     */
+    public long turnSeconds() {
+        return turnSeconds;
+    }
+
+    /** Whether a move is on the clock at all. */
+    public boolean isClockRunning() {
+        return turnDeadline > 0;
     }
 
     /** The name recorded against a seat, or null when the computer is playing it. */
@@ -173,7 +230,11 @@ public class GameSession {
         List<SeatDto> seats = new ArrayList<>(PlayerColor.values().length);
         for (PlayerColor color : PlayerColor.values()) {
             seats.add(new SeatDto(
-                    color.name(), nameOf(color), botFor(color).isPresent(), color == viewer));
+                    color.name(),
+                    nameOf(color),
+                    botFor(color).isPresent(),
+                    color == viewer,
+                    SeatDto.difficultyOf(bots.get(color))));
         }
         return seats;
     }

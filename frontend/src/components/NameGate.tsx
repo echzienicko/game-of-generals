@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { useGame } from '../state/GameContext'
 import { MAX_NAME_LENGTH, tidyName } from '../state/playerName'
 import { useLinkHandler } from '../routing'
+import { ThemeToggle } from './ThemeToggle'
 
 /**
  * Asked once, on the very first visit.
@@ -30,6 +31,7 @@ export function NameGate() {
   return (
     <main className="lobby">
       <header className="lobby__header">
+        <ThemeToggle />
         <h1>Game of the Generals</h1>
         <p className="lobby__tagline">
           Twenty-one pieces a side. Read your opponent's movements, guess their ranks, and take

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useGame } from '../state/GameContext'
 import { ChatPanel } from './ChatPanel'
 import { yourLabel } from '../seats'
+import { ThemeToggle } from './ThemeToggle'
 
 export function WaitingRoom() {
   const { session, game, leaveGame, connected } = useGame()
@@ -23,6 +24,7 @@ export function WaitingRoom() {
 
   return (
     <main className="waiting">
+      <ThemeToggle />
       <h1>Waiting for an opponent</h1>
       <p className="waiting__hint">
         Share this code. The game starts as soon as both players are in.

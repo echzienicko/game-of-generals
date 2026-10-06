@@ -1,5 +1,6 @@
 import type {
   ApiError,
+  BotDifficulty,
   DeploymentEntry,
   GameState,
   JoinResult,
@@ -73,6 +74,14 @@ export const api = {
   matchmake: (name: string) =>
     request<MatchResult | JoinResult>('POST', '/games/matchmake', undefined, { name }),
 
+  /**
+   * A game against the computer. The level rides on the query string because that is where
+   * the server reads it, and it is always sent: the server's own default is the hardest
+   * level, so leaving it off would pick a game the player did not choose.
+   */
+  vsBot: (name: string, difficulty: BotDifficulty) =>
+    request<JoinResult>('POST', `/games/vs-bot?difficulty=${difficulty}`, undefined, { name }),
+
   // No limit by default: the whole ledger, every player who has finished a game.
   leaderboard: (limit?: number) =>
     request<Leaderboard>('GET', limit === undefined ? '/leaderboard' : `/leaderboard?limit=${limit}`),
@@ -88,4 +97,11 @@ export const api = {
 
   move: (gameId: string, token: string, from: Coordinate, to: Coordinate) =>
     request<GameState>('POST', `/games/${gameId}/move`, token, { from, to }),
+
+  /**
+   * Concedes the game. No body: the token says who is leaving, and the answer is the
+   * finished game — for the loser, and (pushed) for the opponent who has just won it.
+   */
+  resign: (gameId: string, token: string) =>
+    request<GameState>('POST', `/games/${gameId}/resign`, token),
 }

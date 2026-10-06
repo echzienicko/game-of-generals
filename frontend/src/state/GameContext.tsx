@@ -13,7 +13,9 @@ import { connectGameSocket, type GameSocket } from '../api/socket'
 import { applyQuietMove } from '../rules'
 import { readStoredName, storeName } from './playerName'
 import type {
+  BotDifficulty,
   Coordinate,
+  JoinResult,
   DeploymentEntry,
   GameState,
   PlayerColor,
@@ -82,7 +84,15 @@ interface GameStore {
   createGame: () => Promise<void>
   joinGame: (gameId: string) => Promise<void>
   matchmake: () => Promise<void>
+  /** A game against the computer, at the level chosen. */
+  playComputer: (difficulty: BotDifficulty) => Promise<void>
   leaveGame: () => void
+  /**
+   * Concedes the game: the server awards the win to the opponent and the finished board
+   * comes back. Unlike {@link leaveGame} this is not local — the player stays in the seat
+   * to be told what their leaving cost, and leaves for the lobby from the end screen.
+   */
+  resign: () => Promise<void>
   submitPlacement: (pieces: DeploymentEntry[]) => Promise<void>
   movePiece: (from: Coordinate, to: Coordinate) => Promise<void>
   /** Says something to the other player. Resolves once the server has taken it. */
@@ -200,15 +210,26 @@ export function GameProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  /**
+   * Takes the seat the server just handed out.
+   *
+   * <p>Every way into a game ends here — created, joined, matched or against the computer —
+   * because what the rest of the app needs from all four is identical: a session stored so
+   * a refresh lands back in the game, and a session in state so the socket connects and the
+   * board loads. What differs is only which endpoint was asked.
+   */
+  const seat = useCallback((result: JoinResult) => {
+    const next: Session = { gameId: result.gameId, token: result.token, youAre: result.youAre }
+    writeStoredSession(next)
+    setSession(next)
+  }, [])
+
   const createGame = useCallback(
     () =>
       run(async () => {
-        const result = await api.create(requireName(playerName))
-        const next: Session = { gameId: result.gameId, token: result.token, youAre: result.youAre }
-        writeStoredSession(next)
-        setSession(next)
+        seat(await api.create(requireName(playerName)))
       }),
-    [run, playerName],
+    [run, playerName, seat],
   )
 
   const joinGame = useCallback(
@@ -218,12 +239,17 @@ export function GameProvider({ children }: { children: ReactNode }) {
         if (!trimmed) {
           throw new ApiRequestError(400, 'Enter a game code')
         }
-        const result = await api.join(trimmed, requireName(playerName))
-        const next: Session = { gameId: result.gameId, token: result.token, youAre: result.youAre }
-        writeStoredSession(next)
-        setSession(next)
+        seat(await api.join(trimmed, requireName(playerName)))
       }),
-    [run, playerName],
+    [run, playerName, seat],
+  )
+
+  const playComputer = useCallback(
+    (difficulty: BotDifficulty) =>
+      run(async () => {
+        seat(await api.vsBot(requireName(playerName), difficulty))
+      }),
+    [run, playerName, seat],
   )
 
   const matchmake = useCallback(
@@ -258,6 +284,24 @@ export function GameProvider({ children }: { children: ReactNode }) {
     setChatError(null)
     setConnected(false)
   }, [])
+
+  /**
+   * Concedes the game for this session's seat.
+   *
+   * <p>Routed through {@code run} like any other move, because it changes the board for
+   * both players and a refusal ("the game is already over") deserves the same banner as
+   * any other. The answer is a finished game, so the end screen appears from the response
+   * or from the push that overtakes it — either way the player is left sitting in the seat
+   * to see what leaving cost them, and goes back to the lobby from there.
+   */
+  const resign = useCallback(
+    () =>
+      run(async () => {
+        if (!session) return
+        await applyUnlessPushed(() => api.resign(session.gameId, session.token))
+      }),
+    [run, session, applyUnlessPushed],
+  )
 
   const submitPlacement = useCallback(
     (pieces: DeploymentEntry[]) =>
@@ -344,7 +388,9 @@ export function GameProvider({ children }: { children: ReactNode }) {
       createGame,
       joinGame,
       matchmake,
+      playComputer,
       leaveGame,
+      resign,
       submitPlacement,
       movePiece,
       sendChat,
@@ -367,7 +413,9 @@ export function GameProvider({ children }: { children: ReactNode }) {
       createGame,
       joinGame,
       matchmake,
+      playComputer,
       leaveGame,
+      resign,
       submitPlacement,
       movePiece,
       sendChat,

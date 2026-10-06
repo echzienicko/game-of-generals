@@ -3,6 +3,7 @@ package com.generals.api;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.generals.domain.ArmyFactory;
+import com.generals.domain.BotDifficulty;
 import com.generals.domain.Rank;
 import com.generals.service.Leaderboard;
 import org.junit.jupiter.api.DisplayName;
@@ -12,6 +13,7 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MvcResult;
 
@@ -22,7 +24,6 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -87,6 +88,24 @@ class GameApiTest {
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
         return new Seat(gameId, json.readTree(body).get("token").asText(), name);
+    }
+
+    /**
+     * A game against the computer, at {@code difficulty} or at the server's own default
+     * when that is null.
+     */
+    private Seat versusBotAs(String name, String difficulty) throws Exception {
+        MockHttpServletRequestBuilder request = post("/api/games/vs-bot")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(nameJson(name));
+        if (difficulty != null) {
+            request = request.param("difficulty", difficulty);
+        }
+        MvcResult result = mvc.perform(request)
+                .andExpect(status().isCreated())
+                .andReturn();
+        JsonNode node = json.readTree(result.getResponse().getContentAsString());
+        return new Seat(node.get("gameId").asText(), node.get("token").asText(), name);
     }
 
     /** A legal 21-piece deployment: the first 21 squares of the player's own camp. */
@@ -411,6 +430,48 @@ class GameApiTest {
     }
 
     @Test
+    @DisplayName("a player is told their own army is in, and only their own")
+    void youPlacedIsAboutTheViewer() throws Exception {
+        Seat red = createGame();
+        Seat blue = joinGame(red.gameId());
+        assertFalse(state(red).get("youPlaced").asBoolean(), "nobody has deployed yet");
+        assertFalse(state(blue).get("youPlaced").asBoolean());
+
+        place(red, "RED");
+        // the point of the field: red has something to settle in the UI, blue is still to do
+        assertTrue(state(red).get("youPlaced").asBoolean());
+        assertFalse(state(blue).get("youPlaced").asBoolean());
+
+        place(blue, "BLUE");
+        assertTrue(state(blue).get("youPlaced").asBoolean());
+    }
+
+    @Test
+    @DisplayName("a live turn carries a deadline, and every move gets a fresh one")
+    void turnDeadlineIsSentAndRearmed() throws Exception {
+        Seat red = createGame();
+        Seat blue = joinGame(red.gameId());
+        place(red, "RED");
+        assertTrue(state(red).get("turnDeadlineMillis").isNull(),
+                "RED is not on the clock while BLUE still has pieces to place");
+
+        place(blue, "BLUE");
+        long now = System.currentTimeMillis();
+        JsonNode redsFirstTurn = state(red);
+        assertEquals(60, redsFirstTurn.get("turnSeconds").asInt());
+        long first = redsFirstTurn.get("turnDeadlineMillis").asLong();
+        assertTrue(first > now, "a deadline of " + first + " for a turn starting at " + now);
+        assertTrue(first <= now + 60_000, "a deadline of " + first + " for a turn starting at " + now);
+
+        move(red, 2, 0, 3, 0);
+        JsonNode bluesTurn = state(blue);
+        assertEquals("BLUE", bluesTurn.get("currentPlayer").asText());
+        assertEquals(60, bluesTurn.get("turnSeconds").asInt());
+        assertTrue(bluesTurn.get("turnDeadlineMillis").asLong() > first,
+                "the new turn gets the whole minute, not what was left of the old one");
+    }
+
+    @Test
     @DisplayName("a named game against the bot comes with the bot already seated")
     void versusBotAcceptsAName() throws Exception {
         mvc.perform(post("/api/games/vs-bot")
@@ -419,6 +480,87 @@ class GameApiTest {
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.youAre").value("RED"))
                 .andExpect(jsonPath("$.token").isNotEmpty());
+    }
+
+    // ---------------------------------------------------------------- leaving
+
+    /** A resignation, as a client with a token would send it. */
+    private void resign(Seat seat, int expectedStatus) throws Exception {
+        mvc.perform(post("/api/games/{id}/resign", seat.gameId()).header(TOKEN, seat.token()))
+                .andExpect(status().is(expectedStatus));
+    }
+
+    @Test
+    @DisplayName("leaving the game gives the opponent the win, and both windows are told")
+    void resignationHandsTheOpponentTheWin() throws Exception {
+        String winnerName = "QuitterWinner" + (++nameCounter);
+        String quitterName = "Quitter" + nameCounter;
+        Seat red = createGameAs(winnerName);
+        Seat blue = joinGameAs(red.gameId(), quitterName);
+        int redWinsBefore = winsOnLeaderboard(winnerName);
+        int blueLossesBefore = lossesOnLeaderboard(quitterName);
+
+        mvc.perform(post("/api/games/{id}/resign", blue.gameId()).header(TOKEN, blue.token()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("FINISHED"))
+                .andExpect(jsonPath("$.winner").value("RED"))
+                .andExpect(jsonPath("$.winReason").value("BLUE left the game"));
+
+        JsonNode redView = state(red);
+        assertEquals("FINISHED", redView.get("status").asText());
+        assertEquals("RED", redView.get("winner").asText());
+        assertTrue(redView.get("winReason").asText().contains("left the game"),
+                redView.get("winReason").asText());
+
+        assertEquals(redWinsBefore + 1, winsOnLeaderboard(winnerName),
+                "the player who was left behind is credited with the win");
+        assertEquals(blueLossesBefore + 1, lossesOnLeaderboard(quitterName),
+                "and the one who left is recorded as having lost it");
+    }
+
+    @Test
+    @DisplayName("leaving mid-game stops the clock, and cannot be done twice")
+    void resignationMidGameStopsTheClock() throws Exception {
+        Seat red = createGame();
+        Seat blue = joinGame(red.gameId());
+        placeBoth(red, blue);
+        assertTrue(state(red).get("turnDeadlineMillis").isNumber(), "the game is under way");
+
+        mvc.perform(post("/api/games/{id}/resign", red.gameId()).header(TOKEN, red.token()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("FINISHED"))
+                .andExpect(jsonPath("$.winner").value("BLUE"))
+                .andExpect(jsonPath("$.winReason").value("RED left the game"));
+        assertTrue(state(red).get("turnDeadlineMillis").isNull(),
+                "the clock is off once the game is over");
+
+        assertEquals("BLUE", state(blue).get("winner").asText(),
+                "the opponent is told they have won without asking");
+        resign(red, 409);
+        resign(blue, 409);
+    }
+
+    @Test
+    @DisplayName("there is nobody to beat while the game waits for an opponent")
+    void resignationNeedsAnOpponent() throws Exception {
+        Seat red = createGame();
+
+        resign(red, 409);
+
+        assertEquals("WAITING_FOR_OPPONENT", state(red).get("status").asText());
+        assertTrue(state(red).get("winner").isNull(), "no winner has been invented for it");
+    }
+
+    @Test
+    @DisplayName("a token from another game cannot resign this one")
+    void resignationRejectsAForeignToken() throws Exception {
+        Seat gameA = createGame();
+        Seat gameB = createGame();
+
+        mvc.perform(post("/api/games/{id}/resign", gameA.gameId()).header(TOKEN, gameB.token()))
+                .andExpect(status().isForbidden());
+
+        assertEquals("WAITING_FOR_OPPONENT", state(gameA).get("status").asText());
     }
 
     // ------------------------------------------------------------------- chat
@@ -545,21 +687,47 @@ class GameApiTest {
     @Test
     @DisplayName("the computer's seat is marked as such and has no name")
     void botSeatHasNoName() throws Exception {
-        MvcResult result = mvc.perform(post("/api/games/vs-bot")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(nameJson("Solo" + (++nameCounter))))
-                .andExpect(status().isCreated())
-                .andReturn();
-        String gameId = json.readTree(result.getResponse().getContentAsString()).get("gameId").asText();
-        String token = json.readTree(result.getResponse().getContentAsString()).get("token").asText();
+        Seat solo = versusBotAs("Solo" + (++nameCounter), null);
 
-        MvcResult view = mvc.perform(get("/api/games/{id}", gameId).header(TOKEN, token))
+        MvcResult view = mvc.perform(get("/api/games/{id}", solo.gameId()).header(TOKEN, solo.token()))
                 .andExpect(status().isOk())
                 .andReturn();
         JsonNode seats = json.readTree(view.getResponse().getContentAsString()).get("seats");
         assertTrue(seats.get(1).get("bot").asBoolean());
         assertTrue(seats.get(1).get("name").isNull(), "nothing is filed for the computer");
         assertFalse(seats.get(0).get("bot").asBoolean());
+    }
+
+    @Test
+    @DisplayName("the computer's seat says how hard it was asked to play")
+    void botSeatCarriesTheDifficultyItWasCreatedWith() throws Exception {
+        Seat solo = versusBotAs("Hard" + (++nameCounter), "heuristic");
+
+        JsonNode seats = state(solo).get("seats");
+        assertEquals("HEURISTIC", seats.get(1).get("difficulty").asText());
+        // and only for that seat: a person was not asked how hard to play
+        assertTrue(seats.get(0).get("difficulty").isNull());
+    }
+
+    @Test
+    @DisplayName("a game against the computer with no level asked for gets the hardest one")
+    void versusBotDefaultsToTheHardestLevel() throws Exception {
+        assertEquals("LEARNING", BotDifficulty.parse(null).name());
+        Seat solo = versusBotAs("Default" + (++nameCounter), null);
+
+        assertEquals("LEARNING", state(solo).get("seats").get(1).get("difficulty").asText());
+    }
+
+    @Test
+    @DisplayName("a level the server does not know is refused, and the refusal lists them")
+    void unknownDifficultyIsRefused() throws Exception {
+        mvc.perform(post("/api/games/vs-bot")
+                        .param("difficulty", "diabolical")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(nameJson("Nick" + (++nameCounter))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(
+                        org.hamcrest.Matchers.containsString("RANDOM, HEURISTIC, LEARNING")));
     }
 
     // ------------------------------------------------------------- leaderboard
